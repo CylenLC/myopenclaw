@@ -4,14 +4,17 @@
 
 ## 这是什么
 
-myopenclaw 用 Docker 运行三个 AI Agent 框架 — [Hermes Agent](https://github.com/NousResearch/hermes-agent)、[Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview)、[OpenClaw](https://github.com/openclaw/openclaw) — 并通过长期记忆、飞书/Discord 桥接、定时任务等将它们整合成一个协作系统。
+myopenclaw 用 Docker 运行三个 AI Agent 框架 — [Hermes Agent](https://github.com/NousResearch/hermes-agent)、[Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview)、[OpenClaw](https://github.com/openclaw/openclaw) — 并通过长期记忆、飞书/Discord 桥接、定时任务、文献管理、水文查询等将它们整合成一个多能力协作系统。
 
 ## 核心能力
 
-- **多 Agent 协作**：Hermes ×3（默认/爱码士/finance）+ Claude Code + OpenClaw，各自负责不同领域
+- **多 Agent 协作**：Hermes ×4（爱玛士 / 爱码士 / 道元 / finance）+ Claude Code + OpenClaw ×2（虾酱 / 知汛），各自负责不同领域
 - **跨 Agent 长期记忆**：TDAI Memory L0→L3 分层管线，飞书说的 Discord 能召回
-- **飞书 + Discord 双通道**：cc-connect（飞书长连接）+ OpenClaw（Discord bot）
+- **飞书 + Discord 双通道**：cc-connect（CC飞总）+ OpenClaw 虾酱 + 道元 bot + zhixun 知汛 bot
 - **自动化工作流**：晨间三签、AI 情报聚合、研发日报、论文管线
+- **水文智能问答**：zhixun 知汛助手，独立 Compose 栈，飞书 bot 直达水库/河道/雨量/流域查询
+- **文献管理**：Zotero MCP 共享服务 + paper pipeline 论文下载入库 + Google Drive 云端存档
+- **通讯与邮件**：cardamum 联系人管理 + himalaya CLI 邮件客户端
 - **数据安全**：数据全在本机，配置 Git 管理，定时快照备份到云盘
 
 ## 快速导航
@@ -23,7 +26,16 @@ myopenclaw 用 Docker 运行三个 AI Agent 框架 — [Hermes Agent](https://gi
 - [OpenClaw 渠道](openclaw-channels.md) — Discord/飞书渠道配置
 - [zhixun 飞书机器人能力](zhixun-feishu-bot-capabilities.md) — 当前能力与可测试问题
 - [TDAI 长期记忆](tdai-memory.md) — Agent 跨会话记忆系统
+- [zhixun 知汛助手](zhixun-feishu-bot.md) — 水文智能问答飞书机器人
 - [调度系统](scheduling.md) — 全部 14 个定时任务总览与安装
 - [备份系统](backup.md) — 快照备份与恢复
 - [服务监控](monitoring.md) — Uptime Kuma + Healthchecks.io
 - [AgentOps 健康采集](agentops.md) — 系统健康信号自动采集
+- [Zotero 文献系统](zotero-cli-cc.md) — Zotero MCP 共享服务（mylibrary 提供）+ paper pipeline + 道元文献 Agent
+- [AI 秘书](aisecretary.md) — 事务数据库 MCP 服务
+- [研发日报](daily-dev-report.md) — 27 仓库每日采集 + 飞书推送
+- [Google Drive](google-drive-rclone.md) — rclone 论文上传配置
+- [通讯录](contacts.md) — cardamum CLI 联系人管理
+- [邮件](email.md) — himalaya CLI 邮件客户端
+- [DNS 配置](dns-setup.md) — 中国域名解析
+- [Linux 服务器部署](linux-server-setup.md) — Linux 环境配置指南

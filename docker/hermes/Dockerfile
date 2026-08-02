@@ -83,14 +83,39 @@ RUN npm install -g @tencentdb-agent-memory/memory-tencentdb@0.3.6
 # https://docs.astral.sh/uv/guides/integration/docker/
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# ── Install zotero-cli-cc (Zotero CLI) via uv ────────────────
-# uv tool install creates an isolated venv and exposes the `zot` binary.
-# UV_TOOL_DIR + UV_TOOL_BIN_DIR place the venv under /opt so both
-# root and hermes users can access it (defaults are under ~/.local).
-RUN UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/opt/uv-tools/bin \
-      uv tool install --python-preference only-system zotero-cli-cc && \
-    ln -sf /opt/uv-tools/bin/zot /usr/local/bin/zot && \
-    chmod -R a+rX /opt/uv-tools
+# ── Install mylibrary (hydrolitagent) — local source preferred, git fallback ──
+# start.sh rsyncs ~/code/mylibrary into .mylibrary-src/ before build when available.
+# When missing (e.g. CI / remote build), falls back to git clone with GITHUB_TOKEN.
+# Skills are copied from the same source so package and skills stay in sync.
+ARG GITHUB_TOKEN=""
+#
+# IMPORTANT: mylibrary declares mcp>=2.0.0 as a dependency (for its zotero-mcp server),
+# but the Hermes container only needs the paper-pipeline client code (paper_to_zotero,
+# zot_link_gdrive).  mcp 2.0 breaks the Hermes agent's built-in MCP tool
+# (streamable_http_client returns 2 values instead of 3).  Install with --no-deps
+# and only pull in the dependencies the container actually uses.
+COPY .mylibrary-src/ /tmp/mylibrary-src/
+RUN if [ -f /tmp/mylibrary-src/pyproject.toml ]; then \
+      echo "   📚 mylibrary: installing from local source" && \
+      uv pip install --python /opt/hermes/.venv/bin/python3 --no-deps /tmp/mylibrary-src/ && \
+      uv pip install --python /opt/hermes/.venv/bin/python3 graphifyy openai httpx pyzotero && \
+      cp -r /tmp/mylibrary-src/skills /opt/mylibrary-skills && cp /tmp/mylibrary-src/scripts/run_paper_pipeline.sh /opt/hermes/scripts/run-paper-pipeline.sh && chmod +x /opt/hermes/scripts/run-paper-pipeline.sh; \
+    else \
+      echo "   📚 mylibrary: local source not found, cloning from GitHub" && \
+      apt-get update && apt-get install -y --no-install-recommends git ca-certificates && \
+      if [ -n "${GITHUB_TOKEN}" ]; then \
+        git clone --depth 1 "https://oauth2:${GITHUB_TOKEN}@github.com/OuyangWenyu/mylibrary.git" /tmp/mylibrary-git; \
+      else \
+        git clone --depth 1 https://github.com/OuyangWenyu/mylibrary.git /tmp/mylibrary-git; \
+      fi && \
+      uv pip install --python /opt/hermes/.venv/bin/python3 --no-deps /tmp/mylibrary-git/ && \
+      uv pip install --python /opt/hermes/.venv/bin/python3 graphifyy openai httpx pyzotero && \
+      cp -r /tmp/mylibrary-git/skills /opt/mylibrary-skills && cp /tmp/mylibrary-git/scripts/run_paper_pipeline.sh /opt/hermes/scripts/run-paper-pipeline.sh && chmod +x /opt/hermes/scripts/run-paper-pipeline.sh && \
+      apt-get purge -y git && \
+      rm -rf /var/lib/apt/lists/*; \
+    fi && \
+    rm -rf /tmp/mylibrary-src /tmp/mylibrary-git && \
+    chown -R hermes:hermes /opt/mylibrary-skills
 
 # ── Config directories for host-side persistence ────────────
 # Mounted from host via docker-compose volumes:
@@ -102,31 +127,6 @@ RUN mkdir -p /opt/gh-config /opt/opencode-config /opt/lark-config /opt/gitcode-c
 
 # opencode respects OPENCODE_CONFIG_DIR to find its config
 ENV OPENCODE_CONFIG_DIR=/opt/opencode-config
-
-# ── Copy zot-link-gdrive bridge script ─────────────────────
-# Creates linked_file attachments in Zotero pointing to Google Drive PDFs.
-# Path auto-constructed from $GDRIVE_PAPERS_LOCAL_PATH + filename.
-# Uses pyzotero from the zotero-cli-cc venv; reads credentials from config.toml.
-COPY scripts/zot-link-gdrive.py /opt/hermes/scripts/zot-link-gdrive.py
-RUN chmod +x /opt/hermes/scripts/zot-link-gdrive.py
-
-# ── Copy paper-to-zotero script ─────────────────────────────
-# Creates complete Zotero item (metadata + linked_file attachment).
-# Enriches metadata from Crossref/arXiv; writes linked_file path to Zotero.
-COPY scripts/paper-to-zotero.py /opt/hermes/scripts/paper-to-zotero.py
-RUN chmod +x /opt/hermes/scripts/paper-to-zotero.py
-
-# ── Copy paper pipeline one-shot script ─────────────────────
-# Atomic pipeline: paper-fetch → rclone → paper-to-zotero → cleanup.
-# Single command replaces the 4-step manual orchestration.
-COPY scripts/run-paper-pipeline.sh /opt/hermes/scripts/run-paper-pipeline.sh
-RUN chmod +x /opt/hermes/scripts/run-paper-pipeline.sh
-
-# ── Tests for paper pipeline scripts ──────────────────────────
-COPY scripts/test-paper-to-zotero.sh /opt/hermes/scripts/test-paper-to-zotero.sh
-COPY scripts/test-run-paper-pipeline.sh /opt/hermes/scripts/test-run-paper-pipeline.sh
-RUN chmod +x /opt/hermes/scripts/test-paper-to-zotero.sh \
-    /opt/hermes/scripts/test-run-paper-pipeline.sh
 
 # ── Entrypoint wrapper ──────────────────────────────────────
 # gh expects config at $HOME/.config/gh/ (= /opt/data/.config/gh/)

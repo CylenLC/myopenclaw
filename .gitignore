@@ -28,5 +28,9 @@ __pycache__/
 .pytest_cache/
 .claude/worktrees/
 
+# ── Build context temporary files ──────────────────────────────────
+docker/hermes/.mylibrary-src/
+docker/zotero-mcp/.mylibrary-src/
+
 # ── mkdocs build output ──────────────────────────────────────────
 site/

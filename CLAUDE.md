@@ -52,9 +52,15 @@ FN:Name
 EMAIL:email@example.com
 END:VCARD' | docker compose exec -T hermes cardamum card create -   # Add contact via stdin
 
-# Zotero CLI (zotero-cli-cc — Zotero literature management)
-docker compose exec hermes-coder zot stats                      # Zotero library statistics
-docker compose exec hermes-coder zot search "keyword" --limit 5 # Search papers
+# Zotero CLI + paper pipeline → migrated to ~/code/mylibrary
+# Zotero MCP — 共享文献查询与分析服务（端口 8002，SSE transport）
+# 独立 Docker 服务，CC飞总 / Hermes / 未来文献 agent 均可通过 http://zotero-mcp:8002/mcp 连接。
+# 双通道：Web API (api.zotero.org) 搜索/元数据 + Local API (host.docker.internal:23119) 全文/PDF。
+# 需要宿主机 Zotero Desktop 运行并开启 "Allow other applications to communicate with Zotero"。
+# 环境变量: ZOTERO_API_KEY + ZOTERO_LIBRARY_ID + ZOTERO_LIBRARY_TYPE + ZOTERO_LOCAL_API_URL
+# MCP server: docker/zotero-mcp/server.py（FastMCP + pyzotero + httpx，6 tools）
+docker compose exec zotero-mcp python3 -c "print('healthy')"  # Zotero MCP 健康检查
+docker compose exec hermes /opt/hermes/.venv/bin/hermes mcp test zotero  # MCP 连接测试（Hermes → zotero-mcp）
 
 # aisecretary — 事务数据库 MCP 服务
 curl -s http://localhost:8000/health                           # Health check
@@ -75,13 +81,19 @@ curl -s -X POST http://localhost:8420/search/memories -H 'Content-Type: applicat
 docker compose exec claude-code tail -f /home/node/.myagentdata/tdai-memory/capture-hook.log
 ./scripts/setup-openclaw-memory.sh                             # 虾酱 OpenClaw memory plugin（独立体系 local 模式）
 
-# Paper pipeline (paper-fetch → Google Drive → Zotero linked_file)
-# One-shot: download PDF + upload to Drive + create Zotero entry with metadata + cleanup
-docker compose exec hermes-coder /opt/hermes/scripts/run-paper-pipeline.sh '<DOI>'
+# Paper pipeline — mylibrary (hydrolitagent) build-time install, local-first + git fallback
+# run_paper_pipeline.sh installed from mylibrary source at build time.
+# Uses python3 -m hydrolitagent.zotero.paper_to_zotero internally.
+docker compose exec hermes-coder /opt/hermes/scripts/run-paper-pipeline.sh '<DOI>'       # One-shot pipeline
 docker compose exec hermes-coder /opt/hermes/scripts/run-paper-pipeline.sh --dry-run '<DOI>'  # Preview only
+docker compose exec hermes-coder python3 -m hydrolitagent.zotero.paper_to_zotero --help  # Direct invocation
 
-# Already in Zotero? Link an uploaded PDF to an existing entry
-docker compose exec hermes-coder /opt/hermes/scripts/zot-link-gdrive.py <ZOTERO_KEY> '<filename>'
+# 道元 (hermes-daoyuan) — 文献学者 Agent，飞书 bot，Zotero 只读
+docker compose exec hermes-daoyuan /opt/hermes/.venv/bin/hermes mcp test zotero   # MCP 连接测试
+docker compose exec -it hermes-daoyuan /opt/hermes/.venv/bin/hermes               # 交互式终端
+docker compose logs -f hermes-daoyuan                                              # 道元日志
+# 道元飞书配置: DAOYUAN_FEISHU_APP_ID/SECRET + 群内开放 (FEISHU_GROUP_POLICY=open)
+# 道元 Zotero 只读: DAOYUAN_ZOTERO_API_KEY (仅 Allow library access)
 
 # dailyinfo launchd scheduling
 ./scripts/launchd/install-dailyinfo.sh
@@ -122,13 +134,22 @@ docker compose exec hermes /opt/hermes/.venv/bin/hermes cron list | grep daily-d
 docker compose exec hermes /opt/hermes/.venv/bin/hermes mcp list | grep repo-scanner  # 查看 MCP 连接
 docker compose exec repo-scanner-mcp python3 -c "from core.report import daily_report_as_dict; print(daily_report_as_dict())"  # 查看日报数据
 cat /tmp/report.txt | docker compose exec -T hermes python3 /opt/hermes-skills/daily-dev-report/tools/send_card.py  # 手动推送测试
+
+# zhixun 飞书机器人（知汛助手）— 独立 Compose 栈，水文查询专用
+# 使用独立的 .env.zhixun-bot 配置 + docker-compose.zhixun-bot.yml
+# 依赖外部 zhixun-agent 仓库（../zhixun-agent，需提前 clone）
+./scripts/start-zhixun-bot.sh --build                        # 首次启动（构建 MCP 镜像 + 拉取 OpenClaw）
+./scripts/start-zhixun-bot.sh                                # 启动（使用已有镜像）
+docker compose --env-file .env.zhixun-bot -f docker-compose.zhixun-bot.yml ps     # 服务状态
+docker compose --env-file .env.zhixun-bot -f docker-compose.zhixun-bot.yml logs -f openclaw-zhixun  # 网关日志
+docker compose --env-file .env.zhixun-bot -f docker-compose.zhixun-bot.yml logs -f zhixun-water-mcp  # MCP 日志
+docker compose --env-file .env.zhixun-bot -f docker-compose.zhixun-bot.yml exec openclaw-zhixun node /app/openclaw.mjs mcp probe water_unified --json  # MCP 工具列表（43 tools）
+docker compose --env-file .env.zhixun-bot -f docker-compose.zhixun-bot.yml stop   # 停止服务
 ```
 
 ## ⚠️ OpenClaw 配置安全规则
 
-**两个网关共享同一份配置** `~/.openclaw/openclaw.json`：
-- launchd 网关 (npm global, 端口 18790) — dailyinfo Discord 推送
-- Docker 网关 (镜像, 端口 18789) — 虾酱主机器人
+OpenClaw 网关（Docker 镜像, 端口 18789）负责 虾酱 Discord 主机器人。配置文件 `~/.openclaw/openclaw.json` 通过 volume mount 挂载到容器内。
 
 **禁止从 host 运行任何会写入配置的 openclaw 命令**，必须在 Docker 容器内操作：
 
@@ -144,23 +165,25 @@ docker compose run --rm --entrypoint "node" openclaw-gateway openclaw.mjs config
 
 **原因**：2026.3.31 因为 host 上运行的 `openclaw doctor --fix` 写出了 Docker 不认识的 streaming 配置格式，导致 gateway.err.log 在 3 个月内增长到 762MB（2380 万行重复错误），无人察觉。
 
-**升级流程**（保持两个网关版本一致）：
+**升级流程**：
 ```bash
-# 1. 更新 npm global 版本
-npm install -g openclaw@<版本>
-# 2. 更新 .env 中的 OPENCLAW_IMAGE
-# 3. 拉取新镜像并重启
-docker compose pull openclaw-gateway
+# 1. 更新 .env 中的 OPENCLAW_IMAGE（默认 latest 自动跟随最新 stable）
+# 2. start.sh 启动前会自动 docker compose pull 拉取最新镜像
 ./scripts/start.sh
+```
+
+**zhixun bot 配置独立**：zhixun 飞书机器人使用独立的 `openclaw.json`（位于 `~/.openclaw-zhixun/`），不与虾酱主配置共享。配置由 `render-config.mjs` 从 `openclaw.json.template` 渲染生成，凭据从 `.env.zhixun-bot` 注入。修改 zhixun bot 配置需在容器内操作：
+```bash
+docker compose --env-file .env.zhixun-bot -f docker-compose.zhixun-bot.yml run --rm --entrypoint "node" openclaw-zhixun openclaw.mjs config validate
 ```
 
 ## Architecture
 
-**Eight Docker services** orchestrated by `docker-compose.yml` on a shared `myopenclaw-net` bridge network:
+**Ten Docker services** orchestrated by `docker-compose.yml` on a shared `myopenclaw-net` bridge network (13 total including profile-gated containers). Plus a **separate zhixun bot stack** (`docker-compose.zhixun-bot.yml`) with its own isolated network:
 
 0. **uptime-kuma** — Official `louislam/uptime-kuma:latest` image. Port 3001. Monitors all service HTTP endpoints + Docker container status via mounted Docker socket (ro). Alerts to Feishu group webhook. Resource limits: 512M/0.5 CPU. Full setup: `docs/monitoring.md`.
 
-1. **hermes** — Custom image (`docker/hermes/Dockerfile`) extending `nousresearch/hermes-agent:latest` with gh CLI, opencode-ai, himalaya (CLI email client), cardamum (CLI contact manager), lark-cli (Feishu CLI), rclone (Google Drive), and zotero-cli-cc (Zotero CLI, via uv). Entry point is `entrypoint-wrapper.sh` which symlinks gh/himalaya/cardamum/lark-cli/zot config dirs, auto-initializes lark-cli/himalaya/cardamum/zot configs from env vars, and sets `OPENCODE_CONFIG_DIR` before handing off to the original Hermes entrypoint. Three profiles: default (port 8642), coder (8643, Discord via DISCORD_BOT_TOKEN, model deepseek-v4-pro), finance (8644). Dashboard on port 9119.
+1. **hermes** — Custom image (`docker/hermes/Dockerfile`) extending `nousresearch/hermes-agent:latest` with gh CLI, opencode-ai, himalaya (CLI email client), cardamum (CLI contact manager), lark-cli (Feishu CLI), rclone (Google Drive), and mylibrary (hydrolitagent, build-time install). Entry point is `entrypoint-wrapper.sh` which symlinks gh/himalaya/cardamum/lark-cli config dirs, auto-initializes lark-cli/himalaya/cardamum/zot configs from env vars, and sets `OPENCODE_CONFIG_DIR` before handing off to the original Hermes entrypoint. Profiles: default (爱玛士, port 8642, Feishu), coder (爱码士, 8643, Discord, paper injection), finance (8644, Feishu).
 
 2. **claude-code** — Custom image (`docker/claude-code/Dockerfile`) based on `ubuntu:24.04` with Python 3.12, uv, build-essential, Node.js 22 (tarball), Claude Code CLI, cc-connect, git, and gh CLI (direct binary). Creates a `node` user for volume mount compatibility. cc-connect bridges Claude Code to Feishu via WebSocket (no public IP needed). Entry point is `entrypoint.sh` which symlinks config dirs, sets up git credential helper (GITHUB_TOKEN for private repo access), creates code directory skeleton (`~/code/opensource/`, `~/code/OuyangWenyu/`, `~/code/iHeadWater/`), maps `DEEPSEEK_API_KEY → ANTHROPIC_API_KEY`, sets `ANTHROPIC_BASE_URL` (DeepSeek Anthropic-compatible endpoint), bootstraps ECC on first run, then runs `cc-connect` as the main process. Claude Code uses `deepseek-v4-pro` as the default model. Port 9090 (cc-connect web admin).
 
@@ -173,6 +196,19 @@ docker compose pull openclaw-gateway
 6. **tdai-memory** — Custom image (`docker/tdai-memory/Dockerfile`) based on `ubuntu:24.04` with Node.js 22 and `@tencentdb-agent-memory/memory-tencentdb@0.3.6`. Port 8420. Provides shared L0→L3 memory pipeline (Gateway HTTP API) for personal agents. LLM backend: DeepSeek (`TDAI_LLM_API_KEY` env). Data stored at `~/.myagentdata/tdai-memory/`. Resource limit 1G (OOM at 512M during large-JSON init). 4 agents share this Gateway bidirectionally — see **Agent Memory (TDAI)** design decision below.
 
 7. **repo-scanner-mcp** — Custom image from `../git-contribution-stats` (`docker/mcp-server/Dockerfile`) using `python:3.12-slim` + `mcp==1.28.1`. Port 8001. Streamable HTTP MCP server exposing 3 tools: `get_daily_report` (person-centric daily R&D report), `query_commits` (raw commit query), `query_authors` (active authors). Data source: `~/.myagentdata/repo-scanner/repos.sqlite` (read-only mount). Used by Hermes via MCP client (`~/.hermes/config.yaml` → `mcp_servers.repo-scanner`). Resource limits: 256M/0.5 CPU.
+
+8. **zotero-mcp** — Custom image (`docker/zotero-mcp/Dockerfile`) using `python:3.12-slim` + `mcp` + `httpx` + `pyzotero`. Port 8002. SSE MCP server exposing 12 tools:
+   - Web API (api.zotero.org): `zotero_search` / `zotero_fulltext_search` / `zotero_search_by_tag` / `zotero_get_item` / `zotero_get_attachments` / `zotero_get_annotations` / `zotero_get_recent` / `zotero_get_collection_items` / `zotero_get_collections` / `zotero_get_tags`
+   - Local API (host.docker.internal:23119): `zotero_get_fulltext` / `zotero_get_file_info`
+   Requires Zotero Desktop running on host with local API enabled. Accessible by any agent on `myopenclaw-net` via `http://zotero-mcp:8002/mcp`. Source code owned by mylibrary, consumed at build time. Resource limits: 256M/0.5 CPU.
+
+9. **hermes-daoyuan** (道元·文献学者) — Separate container using the hermes image with `--profile daoyuan`. Port 8645. Connected to Feishu via independent bot (`DAOYUAN_FEISHU_APP_ID/SECRET`), group-open access (`FEISHU_GROUP_POLICY=open` + `GATEWAY_ALLOW_ALL_USERS=true`). Zotero access is **read-only** via Zotero MCP — can query the library but cannot create/modify items. Uses `zotero-query` skill for MCP-based literature queries. Memory is **isolated** — uses Hermes built-in memory (`memory_enabled: true`, no TDAI provider), not shared with other agents. Paper injection capability (paper-to-zotero) is intentionally restricted to 爱码士 (coder profile). Resource limits: 4G/2 CPU.
+
+**zhixun bot stack** (`docker-compose.zhixun-bot.yml`, independent `zhixun-bot-net` network, managed separately from the main stack):
+
+10. **zhixun-water-mcp** — Custom image (`docker/zhixun-bot/Dockerfile.mcp`) using `python:3.12-slim` + MCP + httpx + pypinyin. SSE MCP server on port 18201. Wraps the upstream Water MCP from zhixun-agent with 3 compatibility layers: `zhixun_core_v2_compat.py` (station name index, v2 response parsing), `related_page_compat.py` (auto-attaches frontend page links to query results), `briefing_compat.py` (hydromodel routing). 43 MCP tools total, 15 write tools filtered by default. Build uses BuildKit multi-context to copy `mcp_servers/water/` from `../zhixun-agent`. Resource limits: 1G/1 CPU.
+
+11. **openclaw-zhixun** — Stock `docker.m.daocloud.io/openclaw/openclaw:2026.7.1` image with custom entrypoint. Port 18791 (loopback only, not exposed). Connected to Feishu via independent bot (`ZHIXUN_BOT_FEISHU_APP_ID/SECRET`), group-open (`groupPolicy: open` + `requireMention: true`) + DM-open. Model: deepseek-v4-pro with independent API key. Only MCP tools allowed (no code execution, browser, or file access). Uses `render-config.mjs` to inject credentials into `openclaw.json.template` at startup. Resource limits: 2G/1 CPU.
 
 **Backup pipeline**: `backup-all-docker.sh` → calls individual `hermes/scripts/backup.sh`, `openclaw/scripts/backup.sh`, `claude/scripts/backup.sh`, `scripts/backup-data.sh`, and `tdai-memory/scripts/backup.sh` in sequence, tracking per-step failures and exiting non-zero if any fail. Each script does selective rsync to timestamped snapshots under `BACKUP_ROOT`, maintains a `latest/` symlink, and prunes snapshots older than `BACKUP_KEEP_DAYS`. OpenClaw's SQLite DBs (`memory/main.sqlite` + 虾酱 `memory-tdai/memories.sqlite`) and TDAI's `memories.sqlite` use `sqlite3 .backup` for hot backup (no `cp` fallback — fails loud if sqlite3 missing). Claude Code backup covers `settings.json`, `projects/`, `skills/`, `plans/`, `tasks/` and cc-connect config.
 
@@ -198,7 +234,13 @@ docker compose pull openclaw-gateway
 
 - **Google Drive (rclone)**: rclone v1.69.2 is installed in the hermes image for direct Google Drive API uploads. OAuth token stored in `~/.hermes/rclone/rclone.conf` (chmod 600, not in git). Remote `gdrive:` is scoped to a target folder via `root_folder_id`. Hermes uses `rclone copy <pdf> gdrive:` to upload papers. Full setup guide: `docs/google-drive-rclone.md`.
 
-- **Hermes coder Discord + Zotero**: hermes-coder (爱码士, port 8643, model deepseek-v4-pro) is connected to Discord via `DISCORD_BOT_TOKEN` env var. Access restricted to a single user via `DISCORD_ALLOWED_USERS`. This is a separate Discord Bot from OpenClaw's 虾酱. The coder profile config at `~/.hermes/profiles/coder/config.yaml` is auto-created by `start.sh` on first run with deepseek-v4-pro as the default model. Has paper-fetch skill and rclone for paper download + Google Drive upload, plus zotero-cli-cc for Zotero library management (SQLite reads + Web API writes). Zotero data dir (`~/Zotero`) is mounted read-only; writes go through the Zotero Web API. PDFs are stored in Google Drive (not Zotero cloud) and linked to Zotero entries via `linked_file` attachments created by `paper-to-zotero.py`. Full workflow: paper-fetch download → rclone upload → paper-to-zotero (metadata + linked_file). Full docs: `docs/zotero-cli-cc.md`.
+- **Hermes coder Discord + Zotero**: hermes-coder (爱码士, port 8643, model deepseek-v4-pro) is connected to Discord via `DISCORD_BOT_TOKEN` env var. Access restricted to a single user via `DISCORD_ALLOWED_USERS`. This is a separate Discord Bot from OpenClaw's 虾酱. Has full Zotero write access — paper-to-zotero pipeline downloads PDFs, uploads to Google Drive, and creates Zotero entries with linked_file attachments. Zotero query is via the shared zotero-mcp service (port 8002).
+
+- **Zotero access model — write vs read-only**: 爱码士 (coder) has full write access via `ZOTERO_API_KEY` for paper injection. 道元 (daoyuan) has **read-only** access via `DAOYUAN_ZOTERO_API_KEY` — can query the library but cannot create/modify items. This separation is enforced at the Zotero API key level (read-only key only has "Allow library access", no write permission).
+
+- **zhixun bot — fully isolated stack**: The zhixun feishu bot (知汛助手) runs as a completely independent Docker Compose stack with its own network (`zhixun-bot-net`), data directory (`~/.openclaw-zhixun`), feishu app credentials, and model API key. It does NOT connect to the main stack's Hermes, cc-connect, TDAI memory, or any other shared service. The bot is restricted to MCP tools only (no code execution, browser, or file access). Write tools (briefing/dispatch/item) are disabled by default; enabling them requires `ZHIXUN_BOT_ENABLE_WRITE_TOOLS=true`. The MCP server wraps upstream zhixun-agent source code at build time via BuildKit `additional_contexts`, applying runtime compatibility patches for zhixun-core v2 without modifying the zhixun-agent repo. Full docs: `docs/zhixun-feishu-bot.md`.
+
+- **mylibrary (hydrolitagent) — build-time install, local-first**: Paper pipeline code (paper_to_zotero, zot_link_gdrive, run_paper_pipeline.sh) lives in `~/code/mylibrary` and is installed into the hermes image at build time. `start.sh` rsyncs the local source into the Docker build context before `docker compose build`; the Dockerfile installs via `uv pip install` (with `--no-deps` to avoid mcp 2.0 conflicts with the Hermes agent). When local source is unavailable (CI / remote), falls back to `git clone --depth 1`. Skills from the same source are copied to `/opt/mylibrary-skills/` and registered via `external_dirs` in Hermes config. See `docs/zotero-cli-cc.md` for legacy zotero-cli-cc docs.
 
 - **Agent Memory (TDAI) — bidirectional cross-agent sharing**: 4 personal agents share long-term memory (L0→L3) via the tdai-memory Gateway. **Two physically-isolated systems** (separate SQLite files, not permission-based): personal (`~/.myagentdata/tdai-memory/`, 4 agents) and 虾酱 (`~/.openclaw/memory-tdai/`, multi-user OpenClaw plugin, local mode). Three integration paths, each with a critical gotcha learned during integration:
   - **Hermes adapter** (default/爱玛士/finance): The npm package ships a Python `MemoryProvider` at `hermes-plugin/memory/memory_tencentdb/`. `entrypoint-wrapper.sh` installs it at **runtime** (not Dockerfile — avoids cardamum cache invalidation), deploys via `cp -r` (NOT symlink — Hermes's plugin scanner doesn't follow symlinks), and injects `provider: memory_tencentdb` (NOT `_v2`) into the `memory:` section only (section-scoped, so `delegation.provider` isn't clobbered). The provider reads the Gateway address from env `MEMORY_TENCENTDB_GATEWAY_HOST`/`_PORT` (NOT config.yaml `gateway_url`). Writes happen automatically via provider lifecycle hooks (`sync_turn`/`on_session_end`).
@@ -227,8 +269,10 @@ When the system DNS (e.g., overseas DNS servers) cannot resolve Chinese domains,
 ## File Layout Conventions
 
 - `docker/<service>/Dockerfile` — custom images (hermes, claude-code, backup-cron)
+- `docker/zhixun-bot/` — zhixun bot MCP Dockerfile + compat layers + config template
+- `openclaw-zhixun/workspace/` — zhixun bot agent policy files (AGENTS.md, SOUL.md)
 - `hermes/scripts/`, `openclaw/scripts/`, `claude/scripts/` — per-service backup scripts, mounted read-only into backup-cron
-- `scripts/` — top-level orchestration scripts (start, stop, restore, cloud setup, launchd)
+- `scripts/` — top-level orchestration scripts (start, stop, restore, cloud setup, launchd, start-zhixun-bot)
 - `scripts/launchd/` — macOS launchd plist 模板 + install 脚本（dailyinfo, agentops, healthchecks）
 - `skills/` — 执行层 skill（morning-triage-v2 等 Hermes cron skill）
 - `.secrets/` — encrypted via git-crypt (hermes.env.example, openclaw.env.example)

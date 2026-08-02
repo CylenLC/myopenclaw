@@ -34,6 +34,8 @@ cp .env.example .env
 | `LARK_CLI_APP_ID` / `SECRET` | 可选 | lark-cli 主应用 |
 | `LARK_CLI_IDM_APP_ID` / `SECRET` | 可选 | lark-cli 第二 profile |
 | `DISCORD_BOT_TOKEN` | 可选 | Hermes coder Discord Bot Token |
+| `DAOYUAN_FEISHU_APP_ID` / `SECRET` | 可选 | 道元·文献学者 飞书应用凭证 |
+| `FINANCE_FEISHU_APP_ID` / `SECRET` | 可选 | Finance 飞书应用凭证 |
 | `UPK_USER` / `UPK_PASS` | 可选 | Uptime Kuma 管理员账号 |
 
 ### 配置云盘路径
@@ -49,7 +51,13 @@ cp .cloud.conf.example .cloud.conf
 部分能力需要额外的仓库。跳过不影响核心服务运行：
 
 ```bash
-./scripts/clone-deps.sh
+./scripts/clone-deps.sh       # 克隆 dailyinfo、aisecretary、git-contribution-stats
+```
+
+如需 zhixun 知汛助手（水文智能问答飞书机器人），额外克隆：
+
+```bash
+git clone https://github.com/OuyangWenyu/zhixun-agent.git ../zhixun-agent
 ```
 
 依赖关系详见 [可移植性](portability.md)。
@@ -100,7 +108,38 @@ Docker 容器内的定时任务（备份、晨间三签、AI News 周报）由 `
 
 全部定时任务的总览和时序依赖详见 [调度系统](scheduling.md)。
 
-## 5. 从云盘恢复数据（可选）
+## 5. 启动 zhixun 知汛助手（可选）
+
+zhixun 知汛助手是独立 Compose 栈，不与主栈一起拉起。需要先克隆 zhixun-agent 仓库并创建配置：
+
+```bash
+cp .env.zhixun-bot.example .env.zhixun-bot
+```
+
+编辑 `.env.zhixun-bot`，必填项：
+
+| 变量 | 说明 |
+|------|------|
+| `ZHIXUN_BOT_FEISHU_APP_ID` / `SECRET` | 飞书自建应用凭据 |
+| `ZHIXUN_BOT_MODEL_API_KEY` | DeepSeek API Key |
+
+启动：
+
+```bash
+./scripts/start-zhixun-bot.sh --build    # 首次启动（构建 MCP 镜像）
+./scripts/start-zhixun-bot.sh            # 后续启动
+```
+
+查看状态：
+
+```bash
+docker compose --env-file .env.zhixun-bot -f docker-compose.zhixun-bot.yml ps
+docker compose --env-file .env.zhixun-bot -f docker-compose.zhixun-bot.yml logs -f openclaw-zhixun
+```
+
+详见 [zhixun 知汛助手](zhixun-feishu-bot.md)。
+
+## 6. 从云盘恢复数据（可选）
 
 新机器首次部署可跳过。从旧机器迁移时：
 
@@ -112,7 +151,7 @@ Docker 容器内的定时任务（备份、晨间三签、AI News 周报）由 `
 
 如果恢复了 `~/.openclaw/openclaw.json` 或 `~/.cc-connect/config.toml`，start.sh 不会覆盖它们。
 
-## 6. 配置渠道
+## 7. 配置渠道
 
 按需配置：
 

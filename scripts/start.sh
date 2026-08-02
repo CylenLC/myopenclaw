@@ -16,6 +16,12 @@ if [[ ! -f "${REPO_ROOT}/.env" ]]; then
   exit 1
 fi
 
+# ── 检查 GH_TOKEN 是否设置（gh CLI / git 认证用）────────────
+if ! grep -q '^GH_TOKEN=.\+' "${REPO_ROOT}/.env" 2>/dev/null; then
+  echo "   ⚠️  GH_TOKEN 未设置 — gh CLI 和 git clone 私有仓库将不可用"
+  echo "   在 .env 中设置 GH_TOKEN（OuyangWenyu 个人 GitHub 令牌）"
+fi
+
 # Read GDRIVE_PAPERS_LOCAL_PATH from .env (can't source directly — cron expressions break bash)
 if [[ -z "${GDRIVE_PAPERS_LOCAL_PATH:-}" ]]; then
   GDRIVE_PAPERS_LOCAL_PATH=$(grep '^GDRIVE_PAPERS_LOCAL_PATH=' "${REPO_ROOT}/.env" 2>/dev/null | cut -d'=' -f2-)
@@ -44,34 +50,52 @@ fi
 echo ""
 
 # ── 从 .cloud.conf 解析 BACKUP_ROOT ─────────────────────────
+# Linux 兼容：.cloud.conf 和云盘目录缺失时降级为 warning，不阻
+# 止后续 Docker 服务启动。备份 cron 容器自身会在缺失时优雅失败。
 CONF_FILE="${REPO_ROOT}/.cloud.conf"
+HAS_CLOUD_CONF=false
 if [[ ! -f "${CONF_FILE}" ]]; then
-  echo "❌ 未找到 .cloud.conf，请先运行 ./scripts/setup-cloud.sh"
-  exit 1
+  echo "   ⚠️  未找到 .cloud.conf，跳过云盘备份配置"
+  echo "   .cloud.conf 用于配置云端备份路径（Google Drive / OneDrive）"
+  echo "   如需备份功能，请从 .cloud.conf.example 创建模板并配置"
+else
+  # shellcheck source=/dev/null
+  source "${CONF_FILE}"
+
+  case "${CLOUD_PROVIDER:-google_drive}" in
+    google_drive) CLOUD_ROOT="${GOOGLE_DRIVE_PATH}" ;;
+    onedrive)     CLOUD_ROOT="${ONEDRIVE_PATH}" ;;
+    custom)       CLOUD_ROOT="${CUSTOM_CLOUD_PATH}" ;;
+  esac
+  CLOUD_ROOT="${CLOUD_ROOT/#\~/$HOME}"
+
+  if [[ ! -d "${CLOUD_ROOT}" ]]; then
+    echo "   ⚠️  云盘目录不存在: ${CLOUD_ROOT}，跳过备份配置"
+    echo "   请确认云盘客户端已登录，或创建 .cloud.conf 指向有效路径"
+  else
+    export BACKUP_ROOT="${CLOUD_ROOT}/${BACKUP_SUBDIR:-myopenclaw-backups}"
+    mkdir -p "${BACKUP_ROOT}/hermes" "${BACKUP_ROOT}/openclaw" "${BACKUP_ROOT}/claude"
+    HAS_CLOUD_CONF=true
+
+    # ── 自动推导 GDRIVE_PAPERS_LOCAL_PATH（若 .env 未设置）────
+    if [[ -z "${GDRIVE_PAPERS_LOCAL_PATH:-}" ]]; then
+      export GDRIVE_PAPERS_LOCAL_PATH="${CLOUD_ROOT}/Papers/Zotero_Papers"
+      echo "   📁 GDRIVE_PAPERS_LOCAL_PATH 自动推导: ${GDRIVE_PAPERS_LOCAL_PATH}"
+    fi
+  fi
 fi
 
-# shellcheck source=/dev/null
-source "${CONF_FILE}"
-
-case "${CLOUD_PROVIDER:-google_drive}" in
-  google_drive) CLOUD_ROOT="${GOOGLE_DRIVE_PATH}" ;;
-  onedrive)     CLOUD_ROOT="${ONEDRIVE_PATH}" ;;
-  custom)       CLOUD_ROOT="${CUSTOM_CLOUD_PATH}" ;;
-esac
-CLOUD_ROOT="${CLOUD_ROOT/#\~/$HOME}"
-export BACKUP_ROOT="${CLOUD_ROOT}/${BACKUP_SUBDIR:-myopenclaw-backups}"
-
-if [[ ! -d "${CLOUD_ROOT}" ]]; then
-  echo "❌ 云盘目录不存在: ${CLOUD_ROOT}，请确认云盘客户端已登录"
-  exit 1
-fi
-
-mkdir -p "${BACKUP_ROOT}/hermes" "${BACKUP_ROOT}/openclaw" "${BACKUP_ROOT}/claude"
-
-# ── 自动推导 GDRIVE_PAPERS_LOCAL_PATH（若 .env 未设置）────────────
-if [[ -z "${GDRIVE_PAPERS_LOCAL_PATH:-}" ]]; then
-  export GDRIVE_PAPERS_LOCAL_PATH="${CLOUD_ROOT}/Papers/Zotero_Papers"
-  echo "   📁 GDRIVE_PAPERS_LOCAL_PATH 自动推导: ${GDRIVE_PAPERS_LOCAL_PATH}"
+# ── 确保 gc (GitCode CLI) 二进制存在（volume mount 需要）─────
+# gc 是 Linux 专用二进制（从 GitCode 源码编译），Mac 上不存在。
+# Docker volume mount 要求源路径存在，否则容器启动失败。
+# 如果 gc 不存在（目录或缺失），创建占位文件让挂载不报错。
+GC_BIN="${HOME}/.openclaw/bin/gc"
+if [[ ! -f "${GC_BIN}" ]]; then
+  mkdir -p "$(dirname "${GC_BIN}")"
+  rm -rf "${GC_BIN}"  # 可能是空目录
+  touch "${GC_BIN}"
+  echo "   ⚠️  gc (GitCode CLI) 二进制不存在，已创建占位文件"
+  echo "   Linux 部署请从源码编译: https://gitcode.com/gitcode-cli"
 fi
 
 # ── 确保工具配置目录存在（volume mount 需要）──────────────────
@@ -127,6 +151,71 @@ YAML
   echo "   📝 已创建 Hermes coder profile 配置（模型: deepseek-v4-pro）"
 fi
 
+# ── 确保 Hermes daoyuan profile（道元·文献学者）──────────────
+DAOYUAN_CONFIG="${HOME}/.hermes/profiles/daoyuan/config.yaml"
+mkdir -p "$(dirname "${DAOYUAN_CONFIG}")"
+if [[ ! -f "${DAOYUAN_CONFIG}" ]]; then
+  cat > "${DAOYUAN_CONFIG}" << 'YAML'
+model:
+  default: deepseek-v4-pro
+  provider: deepseek
+  base_url: https://api.deepseek.com
+fallback_providers:
+- zai
+fallback_model:
+  provider: zai
+  model: glm-5.1
+mcp_servers:
+  zotero:
+    url: http://zotero-mcp:8002/mcp
+    timeout: 120
+memory:
+  memory_enabled: true
+YAML
+  echo "   📝 已创建 Hermes daoyuan profile 配置（模型: deepseek-v4-pro + zotero-mcp + memory 隔离）"
+fi
+
+# ── 确保 zotero-mcp 在默认配置的 mcp_servers 中 ─────────────────
+# Hermes profile 不支持覆盖 mcp_servers，必须在默认配置中注入。
+HERMES_DEFAULT_CONFIG="${HOME}/.hermes/config.yaml"
+if [[ -f "${HERMES_DEFAULT_CONFIG}" ]]; then
+  if ! grep -q 'zotero-mcp:8002' "${HERMES_DEFAULT_CONFIG}"; then
+    python3 -c "
+import pathlib
+p = pathlib.Path('${HERMES_DEFAULT_CONFIG}')
+c = p.read_text()
+entry = '  zotero:\n    connect_timeout: 60\n    enabled: true\n    timeout: 120\n    url: http://zotero-mcp:8002/mcp\n'
+c = c.replace('platform_toolsets:', entry + '\nplatform_toolsets:')
+p.write_text(c)
+print('done')
+"
+    echo "   🔗 zotero-mcp 已注入到 Hermes 默认配置"
+  else
+    echo "   ✅ zotero-mcp 已在 Hermes 默认配置中"
+  fi
+else
+  echo "   ⚠️  ${HERMES_DEFAULT_CONFIG} 不存在，跳过 zotero-mcp 注入"
+fi
+
+# ── 确保 mylibrary skills 在 external_dirs 中 ────────────────────
+# aisecretary 模式：宿主机源码 → 只读挂载 → external_dirs 发现。
+if [[ -f "${HERMES_DEFAULT_CONFIG}" ]]; then
+  if ! grep -q 'mylibrary-skills' "${HERMES_DEFAULT_CONFIG}"; then
+    python3 -c "
+import pathlib
+p = pathlib.Path('${HERMES_DEFAULT_CONFIG}')
+c = p.read_text()
+entry = '    - /opt/mylibrary-skills\n'
+c = c.replace('  external_dirs:\n    - /opt/data/code/aisecretary/skills\n', '  external_dirs:\n    - /opt/data/code/aisecretary/skills\n' + entry)
+p.write_text(c)
+print('done')
+"
+    echo "   📂 mylibrary skills 已加入 Hermes external_dirs"
+  else
+    echo "   ✅ mylibrary skills 已在 Hermes external_dirs 中"
+  fi
+fi
+
 # ── 确保 skills 目录存在并安装 paper-fetch ───────────────────────
 install_paper_fetch() {
   local skills_dir="$1"
@@ -152,62 +241,6 @@ install_paper_fetch() {
 install_paper_fetch "${HOME}/.openclaw/skills" "~/.openclaw/skills"
 install_paper_fetch "${HOME}/.hermes/skills" "~/.hermes/skills"
 
-# ── 安装 zotero-cli-cc skill ────────────────────────────────────
-install_zotero_skill() {
-  local skills_dir="$1"
-  local label="$2"
-  mkdir -p "${skills_dir}"
-  # Check idempotently: .git exists AND SKILL.md at root (not monorepo subdir)
-  if [[ -d "${skills_dir}/zotero-cli-cc/.git" && -f "${skills_dir}/zotero-cli-cc/SKILL.md" ]]; then
-    echo "   ✅ zotero-cli-cc skill 已存在于 ${label}，跳过安装"
-    return
-  fi
-  echo "   📥 安装 zotero-cli-cc skill 到 ${label}（Zotero 文献管理）..."
-  if [[ -d "${skills_dir}/zotero-cli-cc" ]]; then
-    rm -rf "${skills_dir}/zotero-cli-cc"
-  fi
-  git clone --depth 1 https://github.com/Agents365-ai/zotero-cli-cc.git \
-    "${skills_dir}/zotero-cli-cc"
-  cd "${skills_dir}/zotero-cli-cc"
-  # Repo contains the skill at skill/zotero-cli-cc/; move to root
-  if [[ -d "skill/zotero-cli-cc" ]]; then
-    cp -r skill/zotero-cli-cc/* .
-    rm -rf skill
-  fi
-  cd - > /dev/null
-  echo "   ✅ zotero-cli-cc 已安装到 ${skills_dir}/zotero-cli-cc"
-}
-install_zotero_skill "${HOME}/.hermes/skills" "~/.hermes/skills"
-
-# ── 安装 paper-to-zotero skill（项目自有 skill）────────────────────
-install_paper_to_zotero_skill() {
-  local skills_dir="$1"
-  local label="$2"
-  local src="${REPO_ROOT}/skills/paper-to-zotero"
-  mkdir -p "${skills_dir}/paper-to-zotero"
-  # Check idempotently: if SKILL.md hasn't changed, skip
-  if [[ -f "${skills_dir}/paper-to-zotero/SKILL.md" ]]; then
-    if cmp -s "${src}/SKILL.md" "${skills_dir}/paper-to-zotero/SKILL.md"; then
-      echo "   ✅ paper-to-zotero skill 已存在于 ${label}，跳过安装"
-      return
-    fi
-  fi
-  echo "   📥 安装 paper-to-zotero skill 到 ${label}（paper-fetch → Drive → Zotero 完整工作流）..."
-  cp "${src}/SKILL.md" "${skills_dir}/paper-to-zotero/SKILL.md"
-  # Initialize git repo if missing — Hermes only discovers skills with .git
-  if [[ ! -d "${skills_dir}/paper-to-zotero/.git" ]]; then
-    git -C "${skills_dir}/paper-to-zotero" init -q
-    git -C "${skills_dir}/paper-to-zotero" add SKILL.md
-    git -C "${skills_dir}/paper-to-zotero" -c user.email="skill@myopenclaw" -c user.name="myopenclaw" commit -qm "paper-to-zotero skill" --no-gpg-sign
-  elif ! git -C "${skills_dir}/paper-to-zotero" diff --quiet; then
-    git -C "${skills_dir}/paper-to-zotero" add SKILL.md
-    git -C "${skills_dir}/paper-to-zotero" -c user.email="skill@myopenclaw" -c user.name="myopenclaw" commit -qm "update paper-to-zotero skill" --no-gpg-sign
-  fi
-  echo "   ✅ paper-to-zotero 已安装到 ${skills_dir}/paper-to-zotero"
-}
-install_paper_to_zotero_skill "${HOME}/.hermes/skills" "~/.hermes/skills"
-# Also install to coder profile's research skills（爱码士 Discord bot 使用的 skill 路径）
-install_paper_to_zotero_skill "${HOME}/.hermes/profiles/coder/skills/research" "coder profile"
 
 # ── 注入 OpenClaw GitHub token ──────────────────────────────────
 # 从 .env 读取 OPENCLAW_GH_TOKEN，替换 openclaw.json 中的占位符
@@ -247,28 +280,29 @@ for _ext_dir in "${HOME}/.openclaw/extensions"/*/; do
   fi
 done
 
-# ── OpenClaw：版本可见性 + 配置兼容性检查 ─────────────────────
-OPENCLAW_NPM_VERSION=""
-OPENCLAW_DOCKER_VERSION=""
-if [[ -x /opt/homebrew/lib/node_modules/openclaw/dist/index.js ]]; then
-  OPENCLAW_NPM_VERSION=$(/opt/homebrew/lib/node_modules/openclaw/dist/index.js --version 2>/dev/null | head -1 || echo "unknown")
+# ── 拉取最新 OpenClaw 镜像 ──────────────────────────────────
+echo "🦞 拉取最新 OpenClaw 镜像..."
+set +e
+PULL_OUTPUT=$(docker compose pull openclaw-gateway 2>&1)
+PULL_EXIT=$?
+set -e
+if [[ "${PULL_EXIT}" -ne 0 ]]; then
+  echo "   ⚠️  OpenClaw 镜像拉取失败，将使用本地缓存继续启动"
+  echo "${PULL_OUTPUT}" | tail -3 | sed 's/^/   │  /'
+else
+  echo "   ✅ OpenClaw 镜像已更新"
 fi
+echo ""
+
+# ── OpenClaw：版本可见性 + 配置兼容性检查 ─────────────────────
+OPENCLAW_DOCKER_VERSION=""
 if docker compose config 2>/dev/null | grep -q "openclaw-gateway"; then
   OPENCLAW_DOCKER_VERSION=$(docker compose run --rm --entrypoint "node" openclaw-gateway openclaw.mjs --version 2>/dev/null | tail -1 || echo "unknown")
 fi
 
 echo ""
 echo "🦞 OpenClaw 版本检查"
-echo "   launchd 网关 (npm):  ${OPENCLAW_NPM_VERSION:-未安装}"
 echo "   Docker 网关 (镜像): ${OPENCLAW_DOCKER_VERSION:-未安装}"
-
-if [[ -n "${OPENCLAW_NPM_VERSION}" && -n "${OPENCLAW_DOCKER_VERSION}" ]] \
-  && [[ "${OPENCLAW_NPM_VERSION}" != "${OPENCLAW_DOCKER_VERSION}" ]]; then
-  echo "   ⚠️  版本不一致！npm 和 Docker 镜像应保持相同版本，避免配置格式不兼容"
-  echo "   升级方法: npm install -g openclaw@<版本> && 更新 .env OPENCLAW_IMAGE"
-elif [[ -z "${OPENCLAW_NPM_VERSION}" && -z "${OPENCLAW_DOCKER_VERSION}" ]]; then
-  echo "   ℹ️  未检测到 OpenClaw，跳过版本检查"
-fi
 
 # 用 Docker 镜像的 openclaw 校验配置文件兼容性
 # 如果 Docker 版本不认识配置格式，会在这里提前发现，而不是启动后沉默打 762MB 日志
@@ -297,8 +331,55 @@ if [[ "${1:-}" == "--build" ]]; then
   BUILD_FLAG="--build"
 fi
 
+# ── 复制 mylibrary 源码到 build context（本地优先）──────────────
+# 容器 build 时 Dockerfile 会优先使用本地源码进行 pip install。
+# 如果本地没有 mylibrary，Dockerfile 会从 GitHub clone。
+MYLIBRARY_SRC="${HOME}/code/mylibrary"
+MYLIBRARY_CTX="${REPO_ROOT}/docker/hermes/.mylibrary-src"
+if [[ -d "${MYLIBRARY_SRC}" ]]; then
+    echo "   📚 mylibrary 本地源码已检测到，复制到 build context..."
+    rsync -a --delete \
+        --exclude '.git' \
+        --exclude '__pycache__' \
+        --exclude '*.pyc' \
+        --exclude '.venv' \
+        --exclude 'venv' \
+        --exclude 'node_modules' \
+        --exclude '.mypy_cache' \
+        --exclude '.pytest_cache' \
+        --exclude '*.egg-info' \
+        "${MYLIBRARY_SRC}/" "${MYLIBRARY_CTX}/"
+else
+    # Keep empty dir so Docker COPY doesn't fail — git fallback in Dockerfile handles it
+    mkdir -p "${MYLIBRARY_CTX}"
+    echo "   📚 mylibrary 本地未找到，build 时将使用 GitHub clone"
+fi
+
+# ── 复制 mylibrary 源码到 zotero-mcp build context（本地优先）────
+ZOTERO_MCP_CTX="${REPO_ROOT}/docker/zotero-mcp/.mylibrary-src"
+if [[ -d "${MYLIBRARY_SRC}" ]]; then
+    echo "   📚 zotero-mcp: mylibrary 本地源码已检测到，复制到 build context..."
+    rsync -a --delete \
+        --exclude '.git' \
+        --exclude '__pycache__' \
+        --exclude '*.pyc' \
+        --exclude '.venv' \
+        --exclude 'venv' \
+        --exclude 'node_modules' \
+        --exclude '.mypy_cache' \
+        --exclude '.pytest_cache' \
+        --exclude '*.egg-info' \
+        "${MYLIBRARY_SRC}/" "${ZOTERO_MCP_CTX}/"
+else
+    # Keep empty dir so Docker COPY doesn't fail — git fallback in Dockerfile handles it
+    mkdir -p "${ZOTERO_MCP_CTX}"
+    echo "   📚 zotero-mcp: mylibrary 本地未找到，build 时将使用 GitHub clone"
+fi
+
 echo "🚀 启动服务..."
-echo "   备份目录: ${BACKUP_ROOT}"
+if [[ -n "${BACKUP_ROOT:-}" ]]; then
+  echo "   备份目录: ${BACKUP_ROOT}"
+fi
 docker compose up -d ${BUILD_FLAG}
 echo "✅ 服务已启动"
 
@@ -322,6 +403,10 @@ with open('${HERMES_CONFIG}', 'w') as f:
   fi
 fi
 
+# 从 .env 读取 FEISHU_HOME_CHANNEL 和 LARK_USER_OPEN_ID（不能 source .env，cron 表达式会破坏 bash）
+FEISHU_HOME_CHANNEL="${FEISHU_HOME_CHANNEL:-$(grep '^FEISHU_HOME_CHANNEL=' "${REPO_ROOT}/.env" 2>/dev/null | cut -d'=' -f2-)}"
+LARK_USER_OPEN_ID="${LARK_USER_OPEN_ID:-$(grep '^LARK_USER_OPEN_ID=' "${REPO_ROOT}/.env" 2>/dev/null | cut -d'=' -f2-)}"
+
 # ── 注册 Morning Triage v2 Cron Job ───────────────────────────
 # 仅在 cron_mode=allow 时注册
 if [[ -f "${HERMES_CONFIG}" ]] && grep -q 'cron_mode: allow' "${HERMES_CONFIG}" 2>/dev/null; then
@@ -331,50 +416,56 @@ if [[ -f "${HERMES_CONFIG}" ]] && grep -q 'cron_mode: allow' "${HERMES_CONFIG}" 
     sleep 2
   done
   if docker compose ps hermes 2>/dev/null | grep -q 'Up'; then
-    # 读取飞书私聊 Open ID
-    FEISHU_OPEN_ID="${LARK_USER_OPEN_ID:?LARK_USER_OPEN_ID must be set in .env}"
-    DELIVER="feishu:${FEISHU_OPEN_ID}"
+    # 读取飞书私聊推送目标：优先 LARK_USER_OPEN_ID，fallback 到 FEISHU_HOME_CHANNEL
+    FEISHU_OPEN_ID="${LARK_USER_OPEN_ID:-${FEISHU_HOME_CHANNEL:-}}"
+    if [[ -n "${FEISHU_OPEN_ID:-}" ]]; then
+      DELIVER="feishu:${FEISHU_OPEN_ID}"
 
-    # ── Daily Command Center（TDAI 记忆 + 健康信号 + 活跃场景）──
-    EXISTING=$(docker compose exec -T hermes "${HERMES_BIN}" cron list 2>/dev/null | grep -c "Daily Command Center" || true)
-    if [ "${EXISTING:-0}" -lt 1 ]; then
-      docker compose exec -T hermes "${HERMES_BIN}" cron create \
-        "50 23 * * *" \
-        "执行 morning-triage-v2 技能：查询 TDAI Memory Gateway (http://tdai-memory:8420) 获取昨日记忆和活跃场景，汇总系统健康信号，输出 Daily Command Center 晨间简报。" \
-        --deliver "${DELIVER}" \
-        --name "Daily Command Center" 2>/dev/null && \
-        echo "   📋 Daily Command Center cron job 已注册 (每日 7:50 北京)" || \
-        echo "   ⚠️  Daily Command Center cron job 注册失败"
-    else
-      echo "   📋 Daily Command Center cron job 已存在，跳过"
-    fi
+      # ── Daily Command Center（TDAI 记忆 + 健康信号 + 活跃场景）──
+      EXISTING=$(docker compose exec -T hermes "${HERMES_BIN}" cron list 2>/dev/null | grep -c "Daily Command Center" || true)
+      if [ "${EXISTING:-0}" -lt 1 ]; then
+        docker compose exec -T hermes "${HERMES_BIN}" cron create \
+          "50 23 * * *" \
+          "执行 morning-triage-v2 技能：查询 TDAI Memory Gateway (http://tdai-memory:8420) 获取昨日记忆和活跃场景，汇总系统健康信号，输出 Daily Command Center 晨间简报。" \
+          --deliver "${DELIVER}" \
+          --name "Daily Command Center" 2>/dev/null && \
+          echo "   📋 Daily Command Center cron job 已注册 (每日 7:50 北京)" || \
+          echo "   ⚠️  Daily Command Center cron job 注册失败"
+      else
+        echo "   📋 Daily Command Center cron job 已存在，跳过"
+      fi
 
-    # ── 工作日晨间简报（待办事务 + 未读邮件，仅工作日）────────
-    EXISTING=$(docker compose exec -T hermes "${HERMES_BIN}" cron list 2>/dev/null | grep -c "工作日晨间简报" || true)
-    if [ "${EXISTING:-0}" -lt 1 ]; then
-      docker compose exec -T hermes "${HERMES_BIN}" cron create \
-        "30 23 * * 0-4" \
-        "执行 morning-briefing 技能生成晨间简报。收集待办事务和未读邮件，按 SKILL.md 中的规则筛选和呈现。今天是工作日，正常发送。" \
-        --deliver "${DELIVER}" \
-        --name "工作日晨间简报" 2>/dev/null && \
-        echo "   📋 工作日晨间简报 cron job 已注册 (工作日 7:30 北京)" || \
-        echo "   ⚠️  工作日晨间简报 cron job 注册失败"
-    else
-      echo "   📋 工作日晨间简报 cron job 已存在，跳过"
-    fi
+      # ── 工作日晨间简报（待办事务 + 未读邮件，仅工作日）────────
+      EXISTING=$(docker compose exec -T hermes "${HERMES_BIN}" cron list 2>/dev/null | grep -c "工作日晨间简报" || true)
+      if [ "${EXISTING:-0}" -lt 1 ]; then
+        docker compose exec -T hermes "${HERMES_BIN}" cron create \
+          "30 23 * * 0-4" \
+          "执行 morning-briefing 技能生成晨间简报。收集待办事务和未读邮件，按 SKILL.md 中的规则筛选和呈现。今天是工作日，正常发送。" \
+          --deliver "${DELIVER}" \
+          --name "工作日晨间简报" 2>/dev/null && \
+          echo "   📋 工作日晨间简报 cron job 已注册 (工作日 7:30 北京)" || \
+          echo "   ⚠️  工作日晨间简报 cron job 注册失败"
+      else
+        echo "   📋 工作日晨间简报 cron job 已存在，跳过"
+      fi
 
-    # ── daily-dev-report（研发贡献日报）────────────────────────────
-    EXISTING=$(docker compose exec -T hermes "${HERMES_BIN}" cron list 2>/dev/null | grep -c "daily-dev-report" || true)
-    if [ "${EXISTING:-0}" -lt 1 ]; then
-      docker compose exec -T hermes "${HERMES_BIN}" cron create \
-        "55 23 * * *" \
-        "执行 daily-dev-report 技能：调用 MCP get_daily_report 获取昨日研发贡献数据，DeepSeek 深度分析，输出每日研发贡献报告。" \
-        --deliver "${DELIVER}" \
-        --name "daily-dev-report" 2>/dev/null && \
-        echo "   📋 daily-dev-report cron job 已注册 (每日 7:55 北京)" || \
-        echo "   ⚠️  daily-dev-report cron job 注册失败"
+      # ── daily-dev-report（研发贡献日报）────────────────────────────
+      EXISTING=$(docker compose exec -T hermes "${HERMES_BIN}" cron list 2>/dev/null | grep -c "daily-dev-report" || true)
+      if [ "${EXISTING:-0}" -lt 1 ]; then
+        docker compose exec -T hermes "${HERMES_BIN}" cron create \
+          "55 23 * * *" \
+          "执行 daily-dev-report 技能：调用 MCP get_daily_report 获取昨日研发贡献数据，DeepSeek 深度分析，输出每日研发贡献报告。" \
+          --deliver "${DELIVER}" \
+          --name "daily-dev-report" 2>/dev/null && \
+          echo "   📋 daily-dev-report cron job 已注册 (每日 7:55 北京)" || \
+          echo "   ⚠️  daily-dev-report cron job 注册失败"
+      else
+        echo "   📋 daily-dev-report cron job 已存在，跳过"
+      fi
+
     else
-      echo "   📋 daily-dev-report cron job 已存在，跳过"
+      echo "   ⚠️  LARK_USER_OPEN_ID 和 FEISHU_HOME_CHANNEL 都未设置，跳过 cron job 注册"
+      echo "   在 .env 中至少设置一个（推荐 FEISHU_HOME_CHANNEL）"
     fi
   fi
 else
