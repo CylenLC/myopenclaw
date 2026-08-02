@@ -156,7 +156,9 @@ def install(mcp_server: Any, url_server: Any) -> None:
 
         @wraps(original)
         async def wrapped(*args: Any, **kwargs: Any) -> Any:
-            result = await original(*args, **kwargs)
+            result = original(*args, **kwargs)
+            if inspect.isawaitable(result):
+                result = await result
             if not isinstance(result, dict):
                 return result
             try:
@@ -448,6 +450,77 @@ def install(mcp_server: Any, url_server: Any) -> None:
         page = await url_server.get_rainstation_url(rainstation_name=station)
         return page, "rainfall"
 
+    async def identify_station(
+        arguments: dict[str, Any],
+        result: dict[str, Any],
+    ) -> tuple[Any, str] | None:
+        """Attach a page when type identification resolves exactly one station."""
+        identified = result.get("result")
+        if not isinstance(identified, dict):
+            return None
+        stations = identified.get("stations")
+        if not isinstance(stations, list) or len(stations) != 1:
+            return None
+        station = stations[0] if isinstance(stations[0], dict) else {}
+        name = str(identified.get("name") or arguments.get("name") or "").strip()
+        stcd = str(station.get("id") or station.get("stcd") or "").strip()
+        station_type = str(station.get("type") or "").strip()
+        if not name and not stcd:
+            return None
+        identity = stcd or name
+        if station_type == "水库站":
+            page = await url_server.get_reservoir_page_url(
+                reservoir_name=identity, page="detail"
+            )
+            return page, "reservoir-detail"
+        if station_type == "河道站":
+            page = await url_server.get_river_page_url(
+                station_name=identity, page="monitor"
+            )
+            return page, "river-monitor"
+        if station_type == "雨量站":
+            page = await url_server.get_rainstation_url(rainstation_name=identity)
+            return page, "rainfall"
+        return None
+
+    async def available_station(
+        arguments: dict[str, Any],
+        result: dict[str, Any],
+    ) -> tuple[Any, str] | None:
+        if result.get("count") != 1:
+            return None
+        groups = result.get("stations")
+        if not isinstance(groups, dict):
+            return None
+        entries = [
+            item
+            for values in groups.values()
+            if isinstance(values, list)
+            for item in values
+            if isinstance(item, dict)
+        ]
+        if len(entries) != 1:
+            return None
+        station = entries[0]
+        identity = str(station.get("stcd") or station.get("name") or "").strip()
+        station_type = str(station.get("type") or "").strip()
+        if not identity:
+            return None
+        if station_type == "水库站":
+            page = await url_server.get_reservoir_page_url(
+                reservoir_name=identity, page="detail"
+            )
+            return page, "reservoir-detail"
+        if station_type == "河道站":
+            page = await url_server.get_river_page_url(
+                station_name=identity, page="monitor"
+            )
+            return page, "river-monitor"
+        if station_type == "雨量站":
+            page = await url_server.get_rainstation_url(rainstation_name=identity)
+            return page, "rainfall"
+        return None
+
     wrap("list_reservoirs", reservoir_list)
     wrap("get_reservoir_profile", reservoir_profile)
     wrap("get_river_station_detail", river_detail)
@@ -489,3 +562,5 @@ def install(mcp_server: Any, url_server: Any) -> None:
         setattr(mcp_server, "get_rainfall_statistics", rainfall_statistics_with_basin_page)
     wrap("get_station_timeseries", station_timeseries)
     wrap("get_station_latest_data", station_latest)
+    wrap("identify_station_type", identify_station)
+    wrap("list_available_stations", available_station)

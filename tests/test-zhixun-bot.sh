@@ -322,6 +322,15 @@ async def get_station_latest_data(station_type, station_name):
         "summary": {"stcd": "21120032", "station_name": station_name},
     }
 
+def identify_station_type(name):
+    return {
+        "found": True,
+        "result": {
+            "name": name,
+            "stations": [{"id": "10310500", "type": "水库站"}],
+        },
+    }
+
 mcp = SimpleNamespace(
     list_reservoirs=list_reservoirs,
     get_reservoir_profile=get_reservoir_profile,
@@ -339,6 +348,7 @@ mcp = SimpleNamespace(
     get_basin_rainfall_file=get_basin_rainfall_file,
     get_station_timeseries=get_station_timeseries,
     get_station_latest_data=get_station_latest_data,
+    identify_station_type=identify_station_type,
 )
 url_calls = []
 
@@ -428,6 +438,9 @@ async def main():
 
     latest = await mcp.get_station_latest_data("rainfall", "石庙子")
     assert latest["related_page"]["url"].endswith("/rainfall")
+
+    identified = await mcp.identify_station_type("红花尔基")
+    assert identified["related_page"]["url"].endswith("/reservoir/detail")
 
     for result in (
         reservoir_search, reservoir, river, comparison, rainfall, basin_overview,
