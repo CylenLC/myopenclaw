@@ -7,6 +7,7 @@ relative URL.  The Feishu agent needs an absolute URL that it can render.
 from __future__ import annotations
 
 from functools import wraps
+import inspect
 import re
 from typing import Any
 
@@ -107,3 +108,36 @@ def install(module: Any, base_url: str) -> None:
 
         wrapped._plot_url_compat = True
         setattr(module, name, wrapped)
+
+
+def install_unified_wrapper_compat(shared: Any) -> None:
+    """Preserve native image blocks through the unified JSON wrapper.
+
+    The upstream unified wrapper JSON-serializes every tool result. Forecast
+    tools are the exception because they return MCP ImageContent blocks.
+    """
+
+    original = shared.build_tool_wrapper
+    image_tools = {
+        "run_realtime_forecast",
+        "get_latest_realtime_forecast",
+        "run_realtime_forecast_compat",
+        "get_latest_realtime_forecast_compat",
+    }
+
+    def build_tool_wrapper(func: Any, tool_name: str) -> Any:
+        if tool_name not in image_tools:
+            return original(func, tool_name)
+
+        async def wrapped(*args: Any, **kwargs: Any) -> Any:
+            result = func(*args, **kwargs)
+            if inspect.isawaitable(result):
+                result = await result
+            return result
+
+        wrapped.__name__ = tool_name
+        wrapped.__doc__ = (func.__doc__ or "").rstrip()
+        wrapped.__signature__ = inspect.signature(func)
+        return wrapped
+
+    shared.build_tool_wrapper = build_tool_wrapper
