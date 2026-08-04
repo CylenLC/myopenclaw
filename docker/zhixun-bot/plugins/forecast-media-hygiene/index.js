@@ -276,9 +276,6 @@ function createForecastImageTool(api, toolContext, overrides = {}) {
   const delivery = toolContext.deliveryContext ?? {};
   const channel = String(delivery.channel ?? toolContext.messageChannel ?? "").split(":")[0].toLowerCase();
   const target = delivery.to ?? toolContext.nativeChannelId;
-  if (channel !== "feishu" || typeof target !== "string" || !target.trim()) {
-    return null;
-  }
 
   return {
     name: "send_forecast_images",
@@ -289,6 +286,9 @@ function createForecastImageTool(api, toolContext, overrides = {}) {
     ),
     parameters: FORECAST_IMAGE_TOOL_SCHEMA,
     async execute(_toolCallId, params) {
+      if (channel !== "feishu" || typeof target !== "string" || !target.trim()) {
+        throw new Error("当前会话未提供可用的飞书投递目标，无法发送原生图片");
+      }
       const attachments = normalizeAttachments(params?.attachments);
       const baseUrl = overrides.baseUrl ?? process.env.ZHIXUN_REALTIME_FORECAST_BASE_URL;
       if (!baseUrl) {

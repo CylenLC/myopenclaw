@@ -219,7 +219,9 @@ await assert.rejects(
   /拒绝下载非实时预报服务同源/,
 );
 assert.equal(sendCalls.length, 3);
-assert.equal(createForecastImageTool(mockApi, { deliveryContext: { channel: "telegram" } }), null);
+const unavailableChannelTool = createForecastImageTool(mockApi, { deliveryContext: { channel: "telegram" } });
+assert.equal(unavailableChannelTool.name, "send_forecast_images");
+await assert.rejects(unavailableChannelTool.execute("call-telegram", { attachments }), /飞书投递目标/);
 const contextFromFeishuRuntime = createForecastImageTool(mockApi, {
   messageChannel: "feishu",
   nativeChannelId: "oc_runtime_chat",
