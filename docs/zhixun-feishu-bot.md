@@ -77,6 +77,7 @@ Compose 的附加构建上下文读取 zhixun-agent 源码，不依赖 zhixun-ag
 ZHIXUN_CORE_BASE_URL=https://ws.waterism.tech:8090/api/v2
 ZHIXUN_REALTIME_FORECAST_BASE_URL=http://10.48.0.81:8097
 ZHIXUN_REALTIME_FORECAST_TIMEOUT=120
+ZHIXUN_REALTIME_FORECAST_IMAGE_TIMEOUT_MS=30000
 ZHIXUN_BOT_MCP_DATA_DIR=/srv/myopenclaw-data/zhixun-water-mcp
 ZHIXUN_MCP_STATION_INDEX_TTL_SECONDS=86400
 ZHIXUN_MCP_STATION_INDEX_WORKERS=12
@@ -206,19 +207,27 @@ ZHIXUN_REALTIME_FORECAST_TIMEOUT=120
 如后端开启 `FORECAST_PLOT_ENABLED=true`，每个成功预报结果会包含
 `plot.url`，例如 `/plots/21401550_simplelstm_<run_id>.png`。MCP 兼容层会自动补全为
 `ZHIXUN_REALTIME_FORECAST_BASE_URL` 的完整 URL，并在工具结果的
-`media_delivery.attachments` 中为每张图片返回 `media_url`。机器人通过
-OpenClaw 的结构化消息工具发送图片：
+`media_delivery.attachments` 中为每张图片返回 `media_url`。由于示例地址是
+内网 HTTP，不能直接交给 OpenClaw 通用媒体加载器：其 SSRF 防护会拒绝私网地址，
+飞书适配器随后会降级成 Markdown 链接。机器人改用本地
+`send_forecast_images` 工具，将完整附件列表一次传入：
 
 ```json
 {
-  "action": "send",
-  "media": "http://10.48.0.81:8097/plots/21401550_simplelstm_<run_id>.png",
-  "message": "simplelstm 降雨径流过程图"
+  "attachments": [
+    {
+      "model_name": "simplelstm",
+      "media_url": "http://10.48.0.81:8097/plots/21401550_simplelstm_<run_id>.png"
+    }
+  ]
 }
 ```
 
-OpenClaw 会下载图片并通过飞书通道上传为原生图片消息，用户不会看到 URL、
-`MEDIA:` 文本或 Markdown。多模型结果必须逐模型调用一次，不能只取第一张。
+插件只接受与 `ZHIXUN_REALTIME_FORECAST_BASE_URL` 完全同源、路径位于 `/plots/`
+的图片。它先下载并校验全部图片，将字节写入权限受限的临时文件，再交给飞书
+适配器逐张上传为原生 `image` 消息，最后立即删除文件。传给飞书适配器的不再是
+内网 URL，所以不会触发 SSRF 链接降级。多模型结果一次传入完整列表，工具内部会
+逐张发送，不会只取第一张；工具返回值不含图片、Base64、URL 或本地路径。
 
 预报图只用于飞书出站投递，不需要再次交给模型理解。专用的
 `forecast-media-hygiene` 插件会在会话落盘前删除原始 `image`/`image_url`
@@ -389,7 +398,9 @@ git pull --ff-only origin feat/realtime-forecast-mcp
 - MCP 端口和 OpenClaw Gateway 端口均不发布到宿主机。
 - 飞书机器人可被加入任意群，并接受所有私聊；群内仍要求 `@机器人`。这会让
   所有可联系或拉入机器人的飞书用户调用 zhixun MCP，请仅向信任的组织成员发布。
-- OpenClaw 工具策略只允许 `bundle-mcp` 和用于当前会话回复的 `message`；飞书
+- OpenClaw 工具策略只允许 `bundle-mcp` 和只能向当前可信会话发送预报图的
+  `send_forecast_images`；通用 `message` 不开放，防止模型再次把内网 URL 交给
+  会降级为链接的旧链路。飞书
   文档、云盘、知识库、群管理等原生工具全部关闭。
 - 如果服务器需要跨主机访问 MCP，应增加 TLS 和认证；当前配置只支持同一
   Docker 网络内访问。

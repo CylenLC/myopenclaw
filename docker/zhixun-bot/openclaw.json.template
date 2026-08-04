@@ -45,7 +45,7 @@
           "mode": "off"
         },
         "tools": {
-          "allow": ["bundle-mcp", "message"]
+          "allow": ["bundle-mcp", "send_forecast_images"]
         }
       }
     ]

@@ -1,7 +1,7 @@
 {
   "id": "forecast-media-hygiene",
-  "name": "Forecast Media Hygiene",
-  "description": "Keeps outbound forecast images out of persisted model context.",
+  "name": "Forecast Native Media",
+  "description": "Uploads trusted forecast plots as native Feishu images without model-context replay.",
   "activation": {
     "onStartup": true
   },

@@ -14,7 +14,7 @@ import re
 from typing import Any
 
 
-COMPAT_VERSION = "2026-08-04-message-tool-v1"
+COMPAT_VERSION = "2026-08-04-native-image-v2"
 
 
 def _absolute_url(value: Any, base_url: str) -> Any:
@@ -159,12 +159,12 @@ def _add_media_attachments(value: Any) -> Any:
             for model, url in entries
         ]
         result["media_delivery"] = {
-            "method": "openclaw_message_tool",
+            "method": "send_forecast_images",
             "attachment_count": len(directives),
             "attachments": directives,
             "response_rule": (
-                "必须通过 OpenClaw message 工具的 media 参数逐张发送；"
-                "media 必须逐字使用 media_url，不得输出 MEDIA: 文本、Markdown 或普通网址"
+                "必须将 attachments 完整列表原样传给 send_forecast_images 工具且只调用一次；"
+                "不得调用 message 工具，不得输出 MEDIA: 文本、Markdown、普通网址或本地路径"
             ),
         }
     return result

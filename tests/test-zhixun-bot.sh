@@ -31,21 +31,43 @@ pass "shell and Node syntax"
 
 node --input-type=module - <<'JS'
 import assert from "node:assert/strict";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import plugin, {
   IMAGE_PLACEHOLDER,
+  createForecastImageTool,
+  parseTrustedPlotUrl,
   sanitizeForecastMediaMessage,
+  stripForecastMediaLinks,
 } from "./docker/zhixun-bot/plugins/forecast-media-hygiene/index.js";
 import { sanitizeTranscriptText } from "./docker/zhixun-bot/sanitize-forecast-session-images.mjs";
 
 let beforeMessageWrite;
+let messageSending;
+let registeredToolFactory;
+let registeredToolOptions;
 plugin.register({
+  registerTool(factory, options) {
+    registeredToolFactory = factory;
+    registeredToolOptions = options;
+  },
   on(name, handler) {
     if (name === "before_message_write") {
       beforeMessageWrite = handler;
     }
+    if (name === "message_sending") {
+      messageSending = handler;
+    }
   },
 });
 assert.equal(typeof beforeMessageWrite, "function");
+assert.equal(typeof messageSending, "function");
+assert.equal(typeof registeredToolFactory, "function");
+assert.deepEqual(registeredToolOptions, {
+  name: "send_forecast_images",
+  optional: true,
+});
 
 const imageMessage = {
   role: "toolResult",
@@ -87,8 +109,120 @@ assert.equal(migrated.changedMessages, 1);
 assert.equal(migrated.text.includes("data:image"), false);
 assert.equal(migrated.text.includes('"type":"image"'), false);
 assert.equal(migrated.text.includes(IMAGE_PLACEHOLDER), true);
+
+assert.equal(
+  parseTrustedPlotUrl(
+    "http://10.48.0.81:8097/plots/21401550_simplelstm_run.png",
+    "http://10.48.0.81:8097",
+  ).pathname,
+  "/plots/21401550_simplelstm_run.png",
+);
+assert.throws(
+  () => parseTrustedPlotUrl("http://127.0.0.1:8097/plots/private.png", "http://10.48.0.81:8097"),
+  /拒绝下载非实时预报服务同源/,
+);
+const visibleForecastText = [
+  "数值预报结果仍然保留。",
+  "[http://10.48.0.81:8097/plots/21401550_simplelstm_run.png](http://10.48.0.81:8097/plots/21401550_simplelstm_run.png)",
+].join("\n");
+const stripped = stripForecastMediaLinks(
+  visibleForecastText,
+  "http://10.48.0.81:8097",
+);
+assert.equal(stripped.changed, true);
+assert.equal(stripped.content, "数值预报结果仍然保留。");
+process.env.ZHIXUN_REALTIME_FORECAST_BASE_URL = "http://10.48.0.81:8097";
+assert.deepEqual(messageSending({ content: visibleForecastText }), {
+  content: "数值预报结果仍然保留。",
+});
+assert.equal(
+  messageSending({ content: "普通链接：https://example.com/report" }),
+  undefined,
+);
+assert.equal(
+  messageSending({
+    content: "http://10.48.0.81:8097/plots/21401550_simplelstm_run.png",
+  }).cancel,
+  true,
+);
+
+const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+const mediaDir = await mkdtemp(path.join(os.tmpdir(), "forecast-native-media-test-"));
+const sendCalls = [];
+const mockApi = {
+  config: { channels: { feishu: { enabled: true } } },
+  logger: { info() {} },
+  runtime: {
+    channel: {
+      outbound: {
+        async loadAdapter(channel) {
+          assert.equal(channel, "feishu");
+          return {
+            async sendMedia(params) {
+              sendCalls.push(params);
+              assert.equal(params.mediaUrl.startsWith(mediaDir), true);
+              assert.equal(params.mediaUrl.startsWith("http"), false);
+              assert.deepEqual(params.mediaLocalRoots, [mediaDir]);
+              assert.equal(params.to, "oc_current_chat");
+              assert.equal(params.text, "");
+              assert.equal((await readdir(mediaDir)).length > 0, true);
+              return { channel: "feishu", messageId: `msg-${sendCalls.length}` };
+            },
+          };
+        },
+      },
+    },
+  },
+};
+const toolContext = {
+  deliveryContext: {
+    channel: "feishu",
+    to: "oc_current_chat",
+    accountId: "default",
+    threadId: "thread-current",
+  },
+  runtimeConfig: mockApi.config,
+};
+const tool = createForecastImageTool(mockApi, toolContext, {
+  baseUrl: "http://10.48.0.81:8097",
+  mediaDir,
+  async fetchImpl(url, options) {
+    assert.equal(url.origin, "http://10.48.0.81:8097");
+    assert.equal(options.redirect, "manual");
+    return new Response(png, { status: 200, headers: { "content-type": "image/png" } });
+  },
+});
+assert.equal(tool.name, "send_forecast_images");
+const attachments = ["simplelstm", "sms3-lag3", "sms3-uhb"].map((model) => ({
+  model_name: model,
+  media_url: `http://10.48.0.81:8097/plots/21401550_${model}_run.png`,
+}));
+const sendResult = await tool.execute("call-1", { attachments });
+assert.equal(sendCalls.length, 3);
+assert.deepEqual(sendResult.details.sent_models, ["simplelstm", "sms3-lag3", "sms3-uhb"]);
+assert.equal(sendResult.details.sent_count, 3);
+assert.equal(sendResult.details.delivery, "feishu_native_image");
+assert.equal(sendResult.content[0].text.includes("http://"), false);
+assert.deepEqual(await readdir(mediaDir), []);
+
+const unsafeTool = createForecastImageTool(mockApi, toolContext, {
+  baseUrl: "http://10.48.0.81:8097",
+  mediaDir,
+  async fetchImpl() {
+    throw new Error("unsafe URL must be rejected before fetch");
+  },
+});
+await assert.rejects(
+  unsafeTool.execute("call-2", {
+    attachments: [{ model_name: "bad", media_url: "http://127.0.0.1/plots/bad.png" }],
+  }),
+  /拒绝下载非实时预报服务同源/,
+);
+assert.equal(sendCalls.length, 3);
+assert.equal(createForecastImageTool(mockApi, { deliveryContext: { channel: "telegram" } }), null);
+await rm(mediaDir, { recursive: true, force: true });
 JS
-pass "forecast images are stripped from persisted model context"
+pass "forecast images use trusted local bytes and stay out of model context"
 
 docker compose \
   --env-file .env.zhixun-bot.example \
@@ -127,6 +261,10 @@ assert mcp["volumes"][0]["target"] == "/var/lib/zhixun-water-mcp"
 for service in services.values():
     assert "ports" not in service
     assert set(service["networks"]) == {"zhixun-bot-net"}
+
+bot = services["openclaw-zhixun"]
+assert bot["environment"]["ZHIXUN_REALTIME_FORECAST_BASE_URL"] == "http://10.48.0.81:8097"
+assert bot["environment"]["ZHIXUN_REALTIME_FORECAST_IMAGE_TIMEOUT_MS"] == "30000"
 
 mounts = services["openclaw-zhixun"]["volumes"]
 sources = {mount["source"] for mount in mounts}
@@ -311,13 +449,13 @@ grep -q 'get_latest_realtime_forecast' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'get_combined_forecast_timeseries' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'sms3-uhb' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'Never claim that a model succeeded' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'Then send every remaining image' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'call `send_forecast_images` exactly once' openclaw-zhixun/workspace/AGENTS.md
 grep -q "Never emit English progress narration" openclaw-zhixun/workspace/AGENTS.md
 grep -q 'never invent an image URL' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'intentionally has no' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'message(action="send"' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'Never call the generic' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'attempted_models' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'structured `media`' openclaw-zhixun/workspace/SOUL.md
+grep -q 'pass the complete list once' openclaw-zhixun/workspace/SOUL.md
 pass "realtime forecast deployment contract and agent routing"
 
 python3 - <<'PY'
@@ -397,10 +535,10 @@ async def main():
     assert summary["successful_models"] == calls
     delivery = result["media_delivery"]
     runtime = result["realtime_forecast_mcp_runtime"]
-    assert runtime["compat_version"] == "2026-08-04-message-tool-v1"
+    assert runtime["compat_version"] == "2026-08-04-native-image-v2"
     assert runtime["configured_models"] == calls
     assert runtime["requested_model_name"] == "all"
-    assert delivery["method"] == "openclaw_message_tool"
+    assert delivery["method"] == "send_forecast_images"
     assert delivery["attachment_count"] == 4
     attachments = delivery["attachments"]
     assert [item["model_name"] for item in attachments] == calls
@@ -709,7 +847,7 @@ with open(sys.argv[2], encoding="utf-8") as stream:
 
 agent = read_only["agents"]["list"][0]
 assert agent["id"] == "zhixun-water"
-assert agent["tools"]["allow"] == ["bundle-mcp", "message"]
+assert agent["tools"]["allow"] == ["bundle-mcp", "send_forecast_images"]
 assert read_only["tools"]["profile"] == "messaging"
 assert read_only["messages"]["visibleReplies"] == "automatic"
 assert read_only["messages"]["groupChat"]["visibleReplies"] == "automatic"
@@ -726,6 +864,7 @@ assert plugins["load"]["paths"] == [
     "/opt/zhixun-bot/plugins/forecast-media-hygiene"
 ]
 assert plugins["entries"]["forecast-media-hygiene"]["enabled"] is True
+assert read_only["channels"]["feishu"]["enabled"] is True
 
 feishu = read_only["channels"]["feishu"]
 assert feishu["dmPolicy"] == "open"
