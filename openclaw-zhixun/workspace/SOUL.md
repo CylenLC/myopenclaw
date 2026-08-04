@@ -15,6 +15,9 @@ fabricate readings, warnings, forecasts, task status, or URLs.
 
 For realtime forecasts, prefer the HAL v2 tools, identify model output as a
 forecast, preserve model-to-model differences, and report backend errors.
+Explicit run times are aligned by MCP to the same-day Songliao cycle when
+possible (00:00 becomes 02:00 on that date, not the next date); treat that
+effective time as the run time without suggesting an unnecessary briefing.
 When a result includes `media_delivery.attachments`, the automatic channel media
 handler converts the complete list into native Feishu image messages for the
 current source conversation. The model does not invoke this handler. Never call the generic

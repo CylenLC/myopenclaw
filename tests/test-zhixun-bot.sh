@@ -526,23 +526,29 @@ try:
     compat._validate_run_reference_time(
         {"data": {"reference_time": "2026-08-06 02:00:00"}},
         "2026-08-05 00:00",
+        "2026-08-05 02:00",
     )
 except RuntimeError as exc:
-    assert "相差 26 小时" in str(exc)
+    assert "相差 24 小时" in str(exc)
 else:
     raise AssertionError("跨日错误起报时间必须被拒绝")
 valid_time = compat._validate_run_reference_time(
     {"data": {"reference_time": "2026-08-05 02:00:00"}},
     "2026-08-05 00:00",
+    "2026-08-05 02:00",
 )
 assert valid_time["reference_time_validation"]["valid"] is True
+assert compat._align_run_reference_time("2026-08-05 00:00") == "2026-08-05 02:00"
+assert compat._align_run_reference_time("2026-08-05 23:01") == "2026-08-06 02:00"
 
 calls = []
+reference_calls = []
 
 async def run_realtime_forecast(
     station_id, reference_time=None, model_name=None, source="api"
 ):
     calls.append(model_name)
+    reference_calls.append(reference_time)
     return {
         "data": {
             "reference_time": reference_time,
@@ -625,7 +631,7 @@ async def main():
     assert summary["successful_models"] == calls
     delivery = result["media_delivery"]
     runtime = result["realtime_forecast_mcp_runtime"]
-    assert runtime["compat_version"] == "2026-08-04-native-image-timeseries-v3"
+    assert runtime["compat_version"] == "2026-08-05-aligned-native-image-v4"
     assert runtime["configured_models"] == calls
     assert runtime["requested_model_name"] == "all"
     assert delivery["method"] == "automatic_feishu_image"
@@ -645,6 +651,23 @@ async def main():
     json.dumps(result, ensure_ascii=False)
 
 asyncio.run(main())
+
+async def midnight_alignment_main():
+    calls.clear()
+    reference_calls.clear()
+    result = await bridge.run_all_realtime_forecasts(
+        station_id="21401550",
+        reference_time="2026-08-05 00:00",
+    )
+    assert reference_calls == ["2026-08-05 02:00"] * 4
+    assert result["data"]["reference_time"] == "2026-08-05 02:00"
+    validation = result["reference_time_validation"]
+    assert validation["requested_reference_time"] == "2026-08-05 00:00"
+    assert validation["effective_reference_time"] == "2026-08-05 02:00"
+    assert validation["valid"] is True
+    assert result["media_delivery"]["attachment_count"] == 4
+
+asyncio.run(midnight_alignment_main())
 
 async def dedicated_all_main():
     calls.clear()
