@@ -220,6 +220,11 @@ await assert.rejects(
 );
 assert.equal(sendCalls.length, 3);
 assert.equal(createForecastImageTool(mockApi, { deliveryContext: { channel: "telegram" } }), null);
+const contextFromFeishuRuntime = createForecastImageTool(mockApi, {
+  messageChannel: "feishu",
+  nativeChannelId: "oc_runtime_chat",
+});
+assert.equal(contextFromFeishuRuntime.name, "send_forecast_images");
 await rm(mediaDir, { recursive: true, force: true });
 JS
 pass "forecast images use trusted local bytes and stay out of model context"

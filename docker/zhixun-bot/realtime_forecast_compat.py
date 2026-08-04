@@ -86,6 +86,19 @@ def _hide_plot_urls(value: Any, available_urls: set[str]) -> Any:
     return value
 
 
+def _compact_model_payload(value: Any) -> Any:
+    """Remove large model internals from the LLM-facing response, preserving forecasts."""
+    if isinstance(value, list):
+        return [_compact_model_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _compact_model_payload(item)
+            for key, item in value.items()
+            if key not in {"input_detail", "hindcast"}
+        }
+    return value
+
+
 def _merge_model_runs(
     results: list[Any],
     errors: list[dict[str, str]],
@@ -160,7 +173,7 @@ def _error_models(value: Any) -> set[str]:
 def _add_media_attachments(value: Any) -> Any:
     entries = list(dict.fromkeys(_plot_entries(value)))
     available_urls = {url for _, url in entries}
-    result = _hide_plot_urls(value, available_urls)
+    result = _compact_model_payload(_hide_plot_urls(value, available_urls))
     if entries and isinstance(result, dict):
         directives = [
             {
@@ -169,7 +182,7 @@ def _add_media_attachments(value: Any) -> Any:
             }
             for model, url in entries
         ]
-        result["media_delivery"] = {
+        media_delivery = {
             "method": "send_forecast_images",
             "attachment_count": len(directives),
             "attachments": directives,
@@ -178,6 +191,8 @@ def _add_media_attachments(value: Any) -> Any:
                 "不得调用 message 工具，不得输出 MEDIA: 文本、Markdown、普通网址或本地路径"
             ),
         }
+        # Put delivery instructions first so clients truncating long JSON still retain them.
+        result = {"media_delivery": media_delivery, **result}
     return result
 
 

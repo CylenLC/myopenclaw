@@ -273,8 +273,10 @@ function toolJsonResult(payload) {
 }
 
 function createForecastImageTool(api, toolContext, overrides = {}) {
-  const delivery = toolContext.deliveryContext;
-  if (delivery?.channel !== "feishu" || typeof delivery.to !== "string" || !delivery.to.trim()) {
+  const delivery = toolContext.deliveryContext ?? {};
+  const channel = String(delivery.channel ?? toolContext.messageChannel ?? "").split(":")[0].toLowerCase();
+  const target = delivery.to ?? toolContext.nativeChannelId;
+  if (channel !== "feishu" || typeof target !== "string" || !target.trim()) {
     return null;
   }
 
@@ -339,7 +341,7 @@ function createForecastImageTool(api, toolContext, overrides = {}) {
         for (const item of localFiles) {
           await adapter.sendMedia({
             cfg: toolContext.runtimeConfig ?? toolContext.config ?? api.config,
-            to: delivery.to.trim(),
+            to: target.trim(),
             text: "",
             mediaUrl: item.filePath,
             mediaLocalRoots: [mediaDir],
