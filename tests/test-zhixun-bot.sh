@@ -245,12 +245,93 @@ grep -q 'get_latest_realtime_forecast' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'get_combined_forecast_timeseries' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'sms3-uhb' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'Never claim that a model succeeded' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'Never display only the first image' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'Never stop after the first attachment' openclaw-zhixun/workspace/AGENTS.md
 grep -q "Never emit English progress narration" openclaw-zhixun/workspace/AGENTS.md
 grep -q 'never invent an image URL' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'plot.native_image=attached' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'display the native image directly' openclaw-zhixun/workspace/SOUL.md
+grep -q 'model_name="all"' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'MEDIA:<media>' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'attempted_models' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'media_attachments' openclaw-zhixun/workspace/SOUL.md
 pass "realtime forecast deployment contract and agent routing"
+
+python3 - <<'PY'
+import asyncio
+import importlib.util
+import json
+import os
+from pathlib import Path
+from types import SimpleNamespace
+
+module_path = Path("docker/zhixun-bot/realtime_forecast_compat.py")
+spec = importlib.util.spec_from_file_location("realtime_forecast_compat", module_path)
+compat = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(compat)
+
+calls = []
+
+async def run_realtime_forecast(
+    station_id, reference_time=None, model_name=None, source="api"
+):
+    calls.append(model_name)
+    return {
+        "data": {
+            "reference_time": reference_time,
+            "results": [
+                {
+                    "station_id": station_id,
+                    "model_name": model_name,
+                    "peak_m3s": 1.0,
+                    "plot": {
+                        "file_path": f"/tmp/{model_name}.png",
+                        "url": f"/plots/{station_id}_{model_name}_run.png",
+                    },
+                }
+            ],
+            "errors": [],
+        },
+        "_links": {"self": {"href": "/api/v2/realtime-forecasts/runs"}},
+    }
+
+async def get_latest_realtime_forecast(
+    station_id, reference_time=None, model_name=None
+):
+    return await run_realtime_forecast(station_id, reference_time, model_name)
+
+bridge = SimpleNamespace(
+    _validate_model_name=lambda value: value,
+    run_realtime_forecast=run_realtime_forecast,
+    get_latest_realtime_forecast=get_latest_realtime_forecast,
+)
+
+os.environ["ZHIXUN_REALTIME_FORECAST_MODELS"] = (
+    "simplelstm,dhf,sms3-lag3,sms3-uhb"
+)
+compat.install(bridge, "http://10.48.0.81:8097")
+
+assert bridge._validate_model_name("all") == "all"
+assert bridge._validate_model_name("sms3-uhb") == "sms3-uhb"
+assert "model_name='all'" in bridge.run_realtime_forecast.__doc__
+
+async def main():
+    result = await bridge.run_realtime_forecast(
+        station_id="21401550",
+        reference_time="2026-08-04 20:00",
+        model_name="all",
+    )
+    assert calls == ["simplelstm", "dhf", "sms3-lag3", "sms3-uhb"]
+    assert result["data"]["attempted_models"] == calls
+    assert [row["model_name"] for row in result["data"]["results"]] == calls
+    attachments = result["media_attachments"]
+    assert [item["model_name"] for item in attachments] == calls
+    assert all(item["media"].startswith("http://10.48.0.81:8097/plots/") for item in attachments)
+    assert all(item["delivery"].startswith("必须在最终回复中") for item in attachments)
+    assert all("url" not in row["plot"] for row in result["data"]["results"])
+    assert all(row["plot"]["media_attachment"] == "available" for row in result["data"]["results"])
+    json.dumps(result, ensure_ascii=False)
+
+asyncio.run(main())
+PY
+pass "all-model expansion and per-model Feishu media attachments"
 
 python3 - <<'PY'
 import asyncio

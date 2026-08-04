@@ -193,17 +193,23 @@ ZHIXUN_REALTIME_FORECAST_TIMEOUT=120
 - `run_realtime_forecast`：运行未来 48 小时实时流量预报；
 - `get_latest_realtime_forecast`：按测站、起报时间或模型查询最新结果。
 
-兼容工具只在专门验证旧 RealTimeForecast 客户端时使用。支持的模型为
-`simplelstm` 和 `dhf`；不指定模型时运行后端全部可用模型。起报时间按
-北京时间传入 `YYYY-MM-DD HH:MM`。
+兼容工具只在专门验证旧 RealTimeForecast 客户端时使用。默认配置的模型为
+`simplelstm`、`dhf`、`sms3-lag3` 和 `sms3-uhb`。请求全部模型时，机器人显式
+传入 `model_name="all"`，MCP 按 `ZHIXUN_REALTIME_FORECAST_MODELS` 逐个调用后端，
+并返回 `attempted_models`、成功结果和逐模型错误。起报时间按北京时间传入
+`YYYY-MM-DD HH:MM`。
 
 如后端开启 `FORECAST_PLOT_ENABLED=true`，每个成功预报结果会包含
 `plot.url`，例如 `/plots/21401550_simplelstm_<run_id>.png`。MCP 兼容层会自动补全为
-`ZHIXUN_REALTIME_FORECAST_BASE_URL` 的完整 URL，机器人会按模型输出图片：
+`ZHIXUN_REALTIME_FORECAST_BASE_URL` 的完整 URL，并在工具结果中生成一条对应的
+`media_attachments` 记录。机器人最终回复在正文后为每张图加入 OpenClaw 媒体指令：
 
-```markdown
-![降雨径流过程图](http://10.48.0.81:8097/plots/21401550_simplelstm_<run_id>.png)
+```text
+MEDIA:http://10.48.0.81:8097/plots/21401550_simplelstm_<run_id>.png
 ```
+
+`MEDIA:` 行不会作为网址或 Markdown 显示；OpenClaw 会下载图片并通过飞书通道
+上传为原生图片消息。多模型结果必须逐模型输出一行，不能只取第一张。
 
 如果 `plot.url` 不存在，只返回数值结果，不猜测或构造图片地址。
 在 zhixun-core 中需确认：
@@ -303,7 +309,7 @@ docker compose \
 
 1. `请检查实时预报服务是否健康，列出已注册测站和模型状态。`
 2. `请对测站 21401550 运行起报时间为 2026-04-17 14:00 的 simplelstm 实时预报，汇报洪峰流量、洪峰时间、预报时段和 run_id。`
-3. `请对测站 21401550 以 2026-04-17 14:00 为起报时间运行全部可用模型，逐一对比 simplelstm 和 dhf 的洪峰流量、洪峰时间和报错，不要对两个模型取平均。`
+3. `请对碧流河水库（21401550）以 2026-08-04 20:00 为起报时间运行全部可用模型。必须使用 model_name=all，列出 attempted_models，并逐一给出 simplelstm、dhf、sms3-lag3、sms3-uhb 的成功结果或失败原因；比较洪峰流量和洪峰时间，不要取平均；每个成功模型都发送一张原生降雨径流过程图，不要输出 Markdown 图片或网址。`
 4. `查询测站 21401550 最新的 dhf 实时预报结果，说明它的起报时间、洪峰和数据来源。`
 5. `查询测站 21401550 在 2026-04-17 14:00 起报的最新预报，将各模型结果分开列出，并单独列出 errors。`
 6. `获取流域 21401550 从 2026-04-01 到 2026-04-11 的 48 小时合并时序，说明 obs、GFS、IFS、MSWEP 和实测流量各有多少个时次。`
@@ -348,7 +354,8 @@ git pull --ff-only origin feat/realtime-forecast-mcp
 - MCP 端口和 OpenClaw Gateway 端口均不发布到宿主机。
 - 飞书机器人可被加入任意群，并接受所有私聊；群内仍要求 `@机器人`。这会让
   所有可联系或拉入机器人的飞书用户调用 zhixun MCP，请仅向信任的组织成员发布。
-- OpenClaw 工具策略只允许 `bundle-mcp`，飞书文档、云盘、知识库、群管理等
-  原生工具全部关闭。
+- OpenClaw 工具策略只允许 `bundle-mcp`；图片使用 OpenClaw 最终回复的 `MEDIA:`
+  附件指令，不开放额外消息工具。飞书文档、云盘、知识库、群管理等原生工具
+  全部关闭。
 - 如果服务器需要跨主机访问 MCP，应增加 TLS 和认证；当前配置只支持同一
   Docker 网络内访问。

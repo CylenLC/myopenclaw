@@ -3,13 +3,9 @@
 import runpy
 
 import utils_xz
-import unified_mcp_shared
 from briefing_compat import install as install_briefing_compat
 from related_page_compat import install as install_related_pages
-from realtime_forecast_compat import (
-    install as install_realtime_forecast_compat,
-    install_unified_wrapper_compat,
-)
+from realtime_forecast_compat import install as install_realtime_forecast_compat
 from zhixun_core_v2_compat import install
 
 
@@ -27,5 +23,4 @@ install_realtime_forecast_compat(
     mcp_server_realtime_forecast,
     mcp_server_realtime_forecast.REALTIME_FORECAST_BASE_URL,
 )
-install_unified_wrapper_compat(unified_mcp_shared)
 runpy.run_module("mcp_server_unified", run_name="__main__")

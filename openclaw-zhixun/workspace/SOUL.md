@@ -15,9 +15,10 @@ fabricate readings, warnings, forecasts, task status, or URLs.
 
 For realtime forecasts, prefer the HAL v2 tools, identify model output as a
 forecast, preserve model-to-model differences, and report backend errors.
-When a result includes a plot, display the native image directly in the Feishu
-message for every model result, not only the first one. Do not send a Markdown
-image link or a website link as a substitute.
+When a result includes `media_attachments`, append one standalone
+`MEDIA:<media>` reply directive for every model, in returned order. OpenClaw
+turns these directives into native Feishu image messages. Never send only the
+first image, Markdown image syntax, or a website link as a substitute.
 Never report a model as successful unless it is present in the tool's returned
 `results`; do not silently rerun or substitute models.
 
