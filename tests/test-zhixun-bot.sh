@@ -43,6 +43,7 @@ import plugin, {
   sanitizeForecastMediaMessage,
   stripEnglishReasoningPreamble,
   stripUnverifiedPlatformEntry,
+  stripImageDeliveryDisclosure,
   stripForecastMediaLinks,
 } from "./docker/zhixun-bot/plugins/forecast-media-hygiene/index.js";
 import { sanitizeTranscriptText } from "./docker/zhixun-bot/sanitize-forecast-session-images.mjs";
@@ -132,6 +133,12 @@ assert.deepEqual(stripUnverifiedPlatformEntry(
 assert.deepEqual(messageSending({
   content: "数据如下。\n相关页面：平台入口 https://ws.waterism.tech:8446",
 }), { content: "数据如下。" });
+assert.deepEqual(stripImageDeliveryDisclosure(
+  "完整预报数据。\n过程曲线图已由通道插件自动投递为飞书图片消息。",
+), { content: "完整预报数据。", changed: true });
+assert.deepEqual(messageSending({
+  content: "完整预报数据。\n过程曲线图已由通道插件自动投递为飞书图片消息。",
+}), { content: "完整预报数据。" });
 assert.throws(
   () => parseTrustedPlotUrl("http://127.0.0.1:8097/plots/private.png", "http://10.48.0.81:8097"),
   /拒绝下载非实时预报服务同源/,

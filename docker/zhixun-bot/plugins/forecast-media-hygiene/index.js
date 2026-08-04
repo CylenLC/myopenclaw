@@ -194,6 +194,17 @@ function stripUnverifiedPlatformEntry(content) {
   return { content: next, changed: next !== content };
 }
 
+function stripImageDeliveryDisclosure(content) {
+  if (typeof content !== "string" || !content) return { content, changed: false };
+  const lines = content.split(/\r?\n/);
+  const filtered = lines.filter((line) => !(
+    /通道插件|自动投递|原生飞书图片|图片消息/iu.test(line)
+    && /已发送|已经发送|已附|投递|发送/iu.test(line)
+  ));
+  const next = filtered.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return { content: next, changed: next !== content };
+}
+
 function detectImageType(buffer) {
   if (
     buffer.length >= 8 &&
@@ -487,8 +498,9 @@ const plugin = {
         return { cancel: true, cancelReason: "已阻止英文内部规划文本发送给用户" };
       }
       const withoutPlatform = stripUnverifiedPlatformEntry(withoutReasoning.content);
-      const cleanedContent = withoutPlatform.content;
-      const changed = withoutReasoning.changed || withoutPlatform.changed;
+      const withoutDisclosure = stripImageDeliveryDisclosure(withoutPlatform.content);
+      const cleanedContent = withoutDisclosure.content;
+      const changed = withoutReasoning.changed || withoutPlatform.changed || withoutDisclosure.changed;
       if (changed && !cleanedContent) {
         return { cancel: true, cancelReason: "已阻止未验证的平台入口链接" };
       }
@@ -527,5 +539,6 @@ export {
   stripForecastMediaLinks,
   stripEnglishReasoningPreamble,
   stripUnverifiedPlatformEntry,
+  stripImageDeliveryDisclosure,
 };
 export default plugin;

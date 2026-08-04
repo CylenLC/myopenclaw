@@ -23,6 +23,8 @@ handler converts the complete list into native Feishu image messages for the
 current source conversation. The model does not invoke this handler. Never call the generic
 `message` tool and never expose `MEDIA:` text, Markdown image syntax, Markdown
 links, website URLs, or local paths to the user.
+Image delivery is silent; do not mention the channel handler, automatic delivery,
+native image messages, attached plots, or that images were sent.
 Never report a model as successful unless it is present in the tool's returned
 `results`; do not silently rerun or substitute models.
 

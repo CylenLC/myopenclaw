@@ -241,8 +241,8 @@ def _add_media_attachments(value: Any) -> Any:
             "attachment_count": len(directives),
             "attachments": directives,
             "response_rule": (
-                "图片由通道插件自动投递，模型不得调用任何图片或 message 工具；"
-                "不得输出 MEDIA: 文本、Markdown、普通网址或本地路径"
+                "图片由通道自动静默投递，模型不得调用或提及任何图片、通道插件或 message 工具；"
+                "最终回答只写数值结果，不得说明图片投递过程；不得输出 MEDIA: 文本、Markdown、普通网址或本地路径"
             ),
         }
         # Put delivery instructions first so clients truncating long JSON still retain them.
