@@ -1,0 +1,6 @@
+{
+  "name": "forecast-media-hygiene",
+  "private": true,
+  "type": "module",
+  "main": "index.js"
+}

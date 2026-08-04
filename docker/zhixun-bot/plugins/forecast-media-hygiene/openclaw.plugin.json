@@ -1,0 +1,13 @@
+{
+  "id": "forecast-media-hygiene",
+  "name": "Forecast Media Hygiene",
+  "description": "Keeps outbound forecast images out of persisted model context.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

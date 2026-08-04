@@ -16,6 +16,8 @@ cd "${REPO_ROOT}"
 bash -n scripts/start-zhixun-bot.sh
 sh -n docker/zhixun-bot/entrypoint.sh
 node --check docker/zhixun-bot/render-config.mjs
+node --check docker/zhixun-bot/sanitize-forecast-session-images.mjs
+node --check docker/zhixun-bot/plugins/forecast-media-hygiene/index.js
 grep -q 'Every successful reservoir, river-station, rainfall-station, or basin query' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'related_page.url' openclaw-zhixun/workspace/AGENTS.md
 grep -q "never construct or guess a URL" openclaw-zhixun/workspace/AGENTS.md
@@ -23,8 +25,70 @@ grep -q 'Always reply in Simplified Chinese' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'Always answer users only in Simplified Chinese' openclaw-zhixun/workspace/SOUL.md
 grep -q '所有发送到飞书的用户可见文字必须使用简体中文' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'cp "${source_file}" "${target_file}"' docker/zhixun-bot/entrypoint.sh
+grep -q 'sanitize-forecast-session-images.mjs' docker/zhixun-bot/entrypoint.sh
 grep -q 'MCP 容器模型配置与 .env.zhixun-bot 不一致' scripts/start-zhixun-bot.sh
 pass "shell and Node syntax"
+
+node --input-type=module - <<'JS'
+import assert from "node:assert/strict";
+import plugin, {
+  IMAGE_PLACEHOLDER,
+  sanitizeForecastMediaMessage,
+} from "./docker/zhixun-bot/plugins/forecast-media-hygiene/index.js";
+import { sanitizeTranscriptText } from "./docker/zhixun-bot/sanitize-forecast-session-images.mjs";
+
+let beforeMessageWrite;
+plugin.register({
+  on(name, handler) {
+    if (name === "before_message_write") {
+      beforeMessageWrite = handler;
+    }
+  },
+});
+assert.equal(typeof beforeMessageWrite, "function");
+
+const imageMessage = {
+  role: "toolResult",
+  content: [
+    { type: "text", text: "sent" },
+    { type: "image", data: "a".repeat(100_000), mimeType: "image/png" },
+    { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+  ],
+  media: [{ url: "http://forecast/plot.png" }],
+  images: ["raw"],
+  __openclaw: {
+    media: [{ kind: "image", url: "http://forecast/plot.png" }],
+    mediaImageBlockFactIndexes: [0],
+    mediaImageLayout: [0],
+    keep: "value",
+  },
+};
+const sanitized = sanitizeForecastMediaMessage(imageMessage);
+assert.equal(sanitized.changed, true);
+assert.deepEqual(
+  sanitized.message.content,
+  [{ type: "text", text: "sent" }, { type: "text", text: IMAGE_PLACEHOLDER }],
+);
+assert.equal("media" in sanitized.message, false);
+assert.equal("images" in sanitized.message, false);
+assert.deepEqual(sanitized.message.__openclaw, {
+  keep: "value",
+  mediaImagePruned: true,
+});
+assert.deepEqual(beforeMessageWrite({ message: imageMessage }).message, sanitized.message);
+
+const textMessage = { role: "assistant", content: [{ type: "text", text: "中文结果" }] };
+assert.equal(sanitizeForecastMediaMessage(textMessage).changed, false);
+assert.equal(beforeMessageWrite({ message: textMessage }), undefined);
+
+const transcript = `${JSON.stringify({ type: "message", message: imageMessage })}\n${JSON.stringify({ type: "message", message: textMessage })}\n`;
+const migrated = sanitizeTranscriptText(transcript);
+assert.equal(migrated.changedMessages, 1);
+assert.equal(migrated.text.includes("data:image"), false);
+assert.equal(migrated.text.includes('"type":"image"'), false);
+assert.equal(migrated.text.includes(IMAGE_PLACEHOLDER), true);
+JS
+pass "forecast images are stripped from persisted model context"
 
 docker compose \
   --env-file .env.zhixun-bot.example \
@@ -648,6 +712,20 @@ assert agent["id"] == "zhixun-water"
 assert agent["tools"]["allow"] == ["bundle-mcp", "message"]
 assert read_only["tools"]["profile"] == "messaging"
 assert read_only["messages"]["visibleReplies"] == "automatic"
+assert read_only["messages"]["groupChat"]["visibleReplies"] == "automatic"
+assert read_only["agents"]["defaults"]["imageMaxDimensionPx"] == 512
+assert read_only["agents"]["defaults"]["contextPruning"] == {
+    "mode": "cache-ttl",
+    "ttl": "1m",
+}
+assert read_only["session"]["resetTriggers"] == ["/new", "/reset"]
+
+plugins = read_only["plugins"]
+assert plugins["allow"] == ["deepseek", "feishu", "forecast-media-hygiene"]
+assert plugins["load"]["paths"] == [
+    "/opt/zhixun-bot/plugins/forecast-media-hygiene"
+]
+assert plugins["entries"]["forecast-media-hygiene"]["enabled"] is True
 
 feishu = read_only["channels"]["feishu"]
 assert feishu["dmPolicy"] == "open"

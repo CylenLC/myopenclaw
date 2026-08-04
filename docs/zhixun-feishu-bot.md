@@ -220,6 +220,13 @@ OpenClaw 的结构化消息工具发送图片：
 OpenClaw 会下载图片并通过飞书通道上传为原生图片消息，用户不会看到 URL、
 `MEDIA:` 文本或 Markdown。多模型结果必须逐模型调用一次，不能只取第一张。
 
+预报图只用于飞书出站投递，不需要再次交给模型理解。专用的
+`forecast-media-hygiene` 插件会在会话落盘前删除原始 `image`/`image_url`
+内容块和媒体重放元数据，只保留简短文字占位符。容器启动时还会清理旧 JSONL
+会话中的图片块，并在原文件旁保留 `.pre-image-sanitize.bak` 备份。因此后续提问
+不会再次把已经发送的三张预报图编码进模型上下文。配置同时启用短周期工具结果
+裁剪，并把图片缩放上限设为 512 像素，作为插件未命中未知媒体格式时的安全兜底。
+
 如果 `plot.url` 不存在，只返回数值结果，不猜测或构造图片地址。
 在 zhixun-core 中需确认：
 
@@ -264,10 +271,11 @@ docker compose \
   node /app/openclaw.mjs mcp probe water_unified --json
 ```
 
-输出中应包含以下 11 个工具：
+输出中应包含以下 12 个工具：
 
 ```text
 realtime_forecast_health
+run_all_realtime_forecasts
 run_realtime_forecast
 get_latest_realtime_forecast
 run_realtime_forecast_compat
@@ -280,8 +288,8 @@ get_actual_precip_compatible_timeseries
 get_mswep_precip_timeseries
 ```
 
-统一 MCP 共注册 69 个工具。默认只读配置过滤 15 个会商/调度/条目写工具后，
-OpenClaw probe 应看到 54 个；上述 11 个实时预报工具均保留。
+统一 MCP 共注册 70 个工具。默认只读配置过滤 15 个会商/调度/条目写工具后，
+OpenClaw probe 应看到 55 个；上述 12 个实时预报工具均保留。
 
 从 MCP 容器内验证后端健康状态：
 
@@ -302,6 +310,24 @@ docker compose \
   logs -f openclaw-zhixun zhixun-water-mcp
 ```
 
+启动日志应出现类似下面的行；数字为首次清理的历史消息数，后续正常重启应为 0：
+
+```text
+[forecast-media-hygiene] sanitized 3 image-bearing message(s) in 1 session file(s)
+```
+
+只检查当前会话目录是否仍有原始图片块（不打印图片内容）：
+
+```bash
+docker compose \
+  --env-file .env.zhixun-bot \
+  -f docker-compose.zhixun-bot.yml \
+  exec openclaw-zhixun sh -lc \
+  'grep -R -l '"'"'"type":"image"'"'"' /home/node/.openclaw/agents/zhixun-water/sessions --include="*.jsonl" 2>/dev/null | wc -l'
+```
+
+期望输出 `0`。`/reset` 仍可用于开始新会话，但清除预报图片上下文不再依赖它。
+
 在任意已加入机器人的群中 `@机器人` 并发送：
 
 ```text
@@ -318,7 +344,7 @@ docker compose \
 
 1. `请检查实时预报服务是否健康，列出已注册测站和模型状态。`
 2. `请对测站 21401550 运行起报时间为 2026-04-17 14:00 的 simplelstm 实时预报，汇报洪峰流量、洪峰时间、预报时段和 run_id。`
-3. `请对碧流河水库（21401550）以 2026-08-04 20:00 为起报时间运行全部可用模型。必须使用 model_name=all，列出 attempted_models，并逐一给出 simplelstm、dhf、sms3-lag3、sms3-uhb 的成功结果或失败原因；比较洪峰流量和洪峰时间，不要取平均；每个成功模型都发送一张原生降雨径流过程图，不要输出 Markdown 图片或网址。`
+3. `请对碧流河水库（21401550）以 2026-08-04 20:00 为起报时间运行全部可用模型。必须调用 run_all_realtime_forecasts，列出 attempted_models，并逐一给出 simplelstm、sms3-lag3、sms3-uhb 的成功结果或失败原因；比较洪峰流量和洪峰时间，不要取平均；每个成功模型都发送一张原生降雨径流过程图，不要输出 Markdown 图片或网址。`
 4. `查询测站 21401550 最新的 dhf 实时预报结果，说明它的起报时间、洪峰和数据来源。`
 5. `查询测站 21401550 在 2026-04-17 14:00 起报的最新预报，将各模型结果分开列出，并单独列出 errors。`
 6. `获取流域 21401550 从 2026-04-01 到 2026-04-11 的 48 小时合并时序，说明 obs、GFS、IFS、MSWEP 和实测流量各有多少个时次。`
