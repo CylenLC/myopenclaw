@@ -40,7 +40,7 @@
           "mode": "off"
         },
         "tools": {
-          "allow": ["bundle-mcp"]
+          "allow": ["bundle-mcp", "message"]
         }
       }
     ]
@@ -48,6 +48,9 @@
   "tools": {
     "profile": "messaging",
     "codeMode": false
+  },
+  "messages": {
+    "visibleReplies": "message_tool"
   },
   "mcp": {
     "servers": {

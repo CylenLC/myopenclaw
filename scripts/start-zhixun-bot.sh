@@ -96,7 +96,24 @@ else
     up -d --force-recreate
 fi
 
+expected_models="$(grep -E '^ZHIXUN_REALTIME_FORECAST_MODELS=' "${ENV_FILE}" | tail -1 | cut -d= -f2- || true)"
+expected_models="${expected_models:-simplelstm,sms3-lag3,sms3-uhb}"
+container_models="$(
+  docker inspect zhixun-water-mcp \
+    --format '{{range .Config.Env}}{{println .}}{{end}}' \
+    | grep -E '^ZHIXUN_REALTIME_FORECAST_MODELS=' \
+    | tail -1 \
+    | cut -d= -f2-
+)"
+if [[ "${container_models}" != "${expected_models}" ]]; then
+  echo "❌ MCP 容器模型配置与 .env.zhixun-bot 不一致"
+  echo "   .env:     ${expected_models}"
+  echo "   container: ${container_models:-<empty>}"
+  exit 1
+fi
+
 echo "✅ 启动命令已提交"
+echo "   实时预报模型: ${container_models}"
 echo "   状态: docker compose --env-file .env.zhixun-bot -f docker-compose.zhixun-bot.yml ps"
 echo "   日志: docker compose --env-file .env.zhixun-bot -f docker-compose.zhixun-bot.yml logs -f openclaw-zhixun"
 echo "   MCP:  docker compose --env-file .env.zhixun-bot -f docker-compose.zhixun-bot.yml exec openclaw-zhixun node /app/openclaw.mjs mcp probe water_unified --json"

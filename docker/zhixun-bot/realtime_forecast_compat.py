@@ -1,8 +1,8 @@
 """Compatibility helpers for realtime forecast models and plot delivery.
 
 zhixun-core stores plots under its static ``/plots`` mount and may return a
-relative URL. OpenClaw needs the absolute URL in a ``MEDIA:`` reply directive
-so its Feishu adapter can upload the plot as a native image message.
+relative URL. OpenClaw needs the absolute URL in the structured ``message``
+tool's media parameter so its Feishu adapter can upload a native image message.
 """
 
 from __future__ import annotations
@@ -12,6 +12,9 @@ import inspect
 import os
 import re
 from typing import Any
+
+
+COMPAT_VERSION = "2026-08-04-message-tool-v1"
 
 
 def _absolute_url(value: Any, base_url: str) -> Any:
@@ -151,19 +154,38 @@ def _add_media_attachments(value: Any) -> Any:
         directives = [
             {
                 "model_name": model,
-                "openclaw_media_directive": f"MEDIA:{url}",
+                "media_url": url,
             }
             for model, url in entries
         ]
         result["media_delivery"] = {
+            "method": "openclaw_message_tool",
             "attachment_count": len(directives),
             "attachments": directives,
             "response_rule": (
-                "最终回复正文结束后，逐项原样复制 openclaw_media_directive 的完整值；"
-                "不得把 model_name、说明文字或字段名拼到 MEDIA: 后面，不得改写 URL"
+                "必须通过 OpenClaw message 工具的 media 参数逐张发送；"
+                "media 必须逐字使用 media_url，不得输出 MEDIA: 文本、Markdown 或普通网址"
             ),
         }
     return result
+
+
+def _add_runtime_config(
+    value: Any,
+    configured_models: tuple[str, ...],
+    requested_model: Any,
+) -> Any:
+    if isinstance(value, dict):
+        value["realtime_forecast_mcp_runtime"] = {
+            "compat_version": COMPAT_VERSION,
+            "configured_models": list(configured_models),
+            "requested_model_name": requested_model,
+            "response_rule": (
+                "回答中涉及配置模型时只能引用 configured_models；"
+                "若与用户预期不符，明确提示当前 MCP 容器环境未更新"
+            ),
+        }
+    return value
 
 
 def install(module: Any, base_url: str) -> None:
@@ -189,7 +211,7 @@ def install(module: Any, base_url: str) -> None:
             model.strip().lower()
             for model in os.environ.get(
                 "ZHIXUN_REALTIME_FORECAST_MODELS",
-                "simplelstm,dhf,sms3-lag3,sms3-uhb",
+                "simplelstm,sms3-lag3,sms3-uhb",
             ).split(",")
             if model.strip() and model.strip().lower() != "all"
         )
@@ -248,7 +270,8 @@ def install(module: Any, base_url: str) -> None:
                 result = _merge_model_runs(model_results, model_errors, configured_models)
             else:
                 result = await __function(*args, **kwargs)
-            return _add_media_attachments(_absolute_url(result, base_url))
+            normalized = _add_media_attachments(_absolute_url(result, base_url))
+            return _add_runtime_config(normalized, configured_models, requested_model)
 
         wrapped._plot_url_compat = True
         if name in run_names:
@@ -260,7 +283,32 @@ def install(module: Any, base_url: str) -> None:
             wrapped.__doc__ = (
                 "支持显式全模型调用：model_name='all' 会按 "
                 "ZHIXUN_REALTIME_FORECAST_MODELS 逐一执行，并返回 attempted_models、"
-                "execution_summary、逐模型错误和 media_delivery。\n\n"
+                "execution_summary、realtime_forecast_mcp_runtime、逐模型错误和 "
+                "media_delivery。\n\n"
                 + base_doc
             )
         setattr(module, name, wrapped)
+
+    run_forecast = getattr(module, "run_realtime_forecast", None)
+    if run_forecast is not None and not hasattr(module, "run_all_realtime_forecasts"):
+
+        async def run_all_realtime_forecasts(
+            station_id: str = "21401550",
+            reference_time: str | None = None,
+            source: str = "api",
+        ) -> Any:
+            """运行 MCP 容器配置的全部实时预报模型，不接受模型名称参数。
+
+            模型集合严格读取 ZHIXUN_REALTIME_FORECAST_MODELS。返回结果包含
+            realtime_forecast_mcp_runtime、execution_summary、逐模型错误和
+            media_delivery；调用方不得自行增加、删除或替换模型。
+            """
+
+            return await run_forecast(
+                station_id=station_id,
+                reference_time=reference_time,
+                model_name="all",
+                source=source,
+            )
+
+        module.run_all_realtime_forecasts = run_all_realtime_forecasts

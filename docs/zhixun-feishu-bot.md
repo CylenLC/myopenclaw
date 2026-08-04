@@ -190,27 +190,35 @@ ZHIXUN_REALTIME_FORECAST_TIMEOUT=120
 
 机器人优先使用 HAL v2 工具：
 
+- `run_all_realtime_forecasts`：严格按容器环境变量运行全部配置模型；
 - `run_realtime_forecast`：运行未来 48 小时实时流量预报；
 - `get_latest_realtime_forecast`：按测站、起报时间或模型查询最新结果。
 
-兼容工具只在专门验证旧 RealTimeForecast 客户端时使用。默认配置的模型为
-`simplelstm`、`dhf`、`sms3-lag3` 和 `sms3-uhb`。请求全部模型时，机器人显式
-传入 `model_name="all"`，MCP 按 `ZHIXUN_REALTIME_FORECAST_MODELS` 逐个调用后端，
+兼容工具只在专门验证旧 RealTimeForecast 客户端时使用。针对碧流河水库的默认
+配置为 `simplelstm`、`sms3-lag3` 和 `sms3-uhb`；`dhf` 当前未在 21401550 注册，
+因此不放入默认候选集合。其他站点确已注册 `dhf` 时可通过环境变量加入。请求
+全部模型时，机器人显式
+调用无 `model_name` 参数的 `run_all_realtime_forecasts`，MCP 按
+`ZHIXUN_REALTIME_FORECAST_MODELS` 逐个调用后端，
 并返回 `attempted_models`、成功结果和逐模型错误。起报时间按北京时间传入
 `YYYY-MM-DD HH:MM`。
 
 如后端开启 `FORECAST_PLOT_ENABLED=true`，每个成功预报结果会包含
 `plot.url`，例如 `/plots/21401550_simplelstm_<run_id>.png`。MCP 兼容层会自动补全为
 `ZHIXUN_REALTIME_FORECAST_BASE_URL` 的完整 URL，并在工具结果的
-`media_delivery.attachments` 中为每张图片返回完整的
-`openclaw_media_directive`。机器人在最终回复正文后原样复制该值：
+`media_delivery.attachments` 中为每张图片返回 `media_url`。机器人通过
+OpenClaw 的结构化消息工具发送图片：
 
-```text
-MEDIA:http://10.48.0.81:8097/plots/21401550_simplelstm_<run_id>.png
+```json
+{
+  "action": "send",
+  "media": "http://10.48.0.81:8097/plots/21401550_simplelstm_<run_id>.png",
+  "message": "simplelstm 降雨径流过程图"
+}
 ```
 
-`MEDIA:` 行不会作为网址或 Markdown 显示；OpenClaw 会下载图片并通过飞书通道
-上传为原生图片消息。多模型结果必须逐模型输出一行，不能只取第一张。
+OpenClaw 会下载图片并通过飞书通道上传为原生图片消息，用户不会看到 URL、
+`MEDIA:` 文本或 Markdown。多模型结果必须逐模型调用一次，不能只取第一张。
 
 如果 `plot.url` 不存在，只返回数值结果，不猜测或构造图片地址。
 在 zhixun-core 中需确认：
@@ -355,8 +363,7 @@ git pull --ff-only origin feat/realtime-forecast-mcp
 - MCP 端口和 OpenClaw Gateway 端口均不发布到宿主机。
 - 飞书机器人可被加入任意群，并接受所有私聊；群内仍要求 `@机器人`。这会让
   所有可联系或拉入机器人的飞书用户调用 zhixun MCP，请仅向信任的组织成员发布。
-- OpenClaw 工具策略只允许 `bundle-mcp`；图片使用 OpenClaw 最终回复的 `MEDIA:`
-  附件指令，不开放额外消息工具。飞书文档、云盘、知识库、群管理等原生工具
-  全部关闭。
+- OpenClaw 工具策略只允许 `bundle-mcp` 和用于当前会话回复的 `message`；飞书
+  文档、云盘、知识库、群管理等原生工具全部关闭。
 - 如果服务器需要跨主机访问 MCP，应增加 TLS 和认证；当前配置只支持同一
   Docker 网络内访问。

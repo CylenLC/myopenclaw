@@ -23,6 +23,7 @@ grep -q 'Always reply in Simplified Chinese' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'Always answer users only in Simplified Chinese' openclaw-zhixun/workspace/SOUL.md
 grep -q '所有发送到飞书的用户可见文字必须使用简体中文' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'cp "${source_file}" "${target_file}"' docker/zhixun-bot/entrypoint.sh
+grep -q 'MCP 容器模型配置与 .env.zhixun-bot 不一致' scripts/start-zhixun-bot.sh
 pass "shell and Node syntax"
 
 docker compose \
@@ -53,7 +54,7 @@ assert mcp["command"][:2] == ["python", "mcp_entrypoint.py"]
 assert mcp["environment"]["ZHIXUN_CORE_BASE_URL"] == "https://ws.waterism.tech:8090/api/v2"
 assert mcp["environment"]["ZHIXUN_REALTIME_FORECAST_BASE_URL"] == "http://10.48.0.81:8097"
 assert mcp["environment"]["ZHIXUN_REALTIME_FORECAST_TIMEOUT"] == "120"
-assert mcp["environment"]["ZHIXUN_REALTIME_FORECAST_MODELS"] == "simplelstm,dhf,sms3-lag3,sms3-uhb"
+assert mcp["environment"]["ZHIXUN_REALTIME_FORECAST_MODELS"] == "simplelstm,sms3-lag3,sms3-uhb"
 assert mcp["environment"]["ZHIXUN_MCP_STATION_INDEX_PATH"] == "/var/lib/zhixun-water-mcp/station-index.json"
 assert mcp["environment"]["ZHIXUN_MCP_STATION_INDEX_TTL_SECONDS"] == "86400"
 assert mcp["environment"]["ZHIXUN_MCP_STATION_INDEX_WORKERS"] == "12"
@@ -241,17 +242,18 @@ pass "briefing hydromodel v2 compatibility and routing guidance"
 
 grep -q 'mcp_server_realtime_forecast.py' scripts/start-zhixun-bot.sh
 grep -q 'run_realtime_forecast' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'run_all_realtime_forecasts' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'get_latest_realtime_forecast' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'get_combined_forecast_timeseries' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'sms3-uhb' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'Never claim that a model succeeded' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'Never stop after the first' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'Then send every remaining image' openclaw-zhixun/workspace/AGENTS.md
 grep -q "Never emit English progress narration" openclaw-zhixun/workspace/AGENTS.md
 grep -q 'never invent an image URL' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'model_name="all"' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'MEDIA:http://' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'intentionally has no' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'message(action="send"' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'attempted_models' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'openclaw_media_directive' openclaw-zhixun/workspace/SOUL.md
+grep -q 'structured `media`' openclaw-zhixun/workspace/SOUL.md
 pass "realtime forecast deployment contract and agent routing"
 
 python3 - <<'PY'
@@ -311,6 +313,9 @@ compat.install(bridge, "http://10.48.0.81:8097")
 assert bridge._validate_model_name("all") == "all"
 assert bridge._validate_model_name("sms3-uhb") == "sms3-uhb"
 assert "model_name='all'" in bridge.run_realtime_forecast.__doc__
+assert "model_name" not in str(
+    __import__("inspect").signature(bridge.run_all_realtime_forecasts)
+)
 
 async def main():
     result = await bridge.run_realtime_forecast(
@@ -327,21 +332,35 @@ async def main():
     assert summary["failed_count"] == 0
     assert summary["successful_models"] == calls
     delivery = result["media_delivery"]
+    runtime = result["realtime_forecast_mcp_runtime"]
+    assert runtime["compat_version"] == "2026-08-04-message-tool-v1"
+    assert runtime["configured_models"] == calls
+    assert runtime["requested_model_name"] == "all"
+    assert delivery["method"] == "openclaw_message_tool"
     assert delivery["attachment_count"] == 4
     attachments = delivery["attachments"]
     assert [item["model_name"] for item in attachments] == calls
     assert all(
-        item["openclaw_media_directive"].startswith(
-            "MEDIA:http://10.48.0.81:8097/plots/"
-        )
+        item["media_url"].startswith("http://10.48.0.81:8097/plots/")
         for item in attachments
     )
-    assert all(set(item) == {"model_name", "openclaw_media_directive"} for item in attachments)
+    assert all(set(item) == {"model_name", "media_url"} for item in attachments)
     assert all("url" not in row["plot"] for row in result["data"]["results"])
     assert all(row["plot"]["media_attachment"] == "available" for row in result["data"]["results"])
     json.dumps(result, ensure_ascii=False)
 
 asyncio.run(main())
+
+async def dedicated_all_main():
+    calls.clear()
+    result = await bridge.run_all_realtime_forecasts(
+        station_id="21401550",
+        reference_time="2026-08-04 20:00",
+    )
+    assert calls == ["simplelstm", "dhf", "sms3-lag3", "sms3-uhb"]
+    assert result["realtime_forecast_mcp_runtime"]["requested_model_name"] == "all"
+
+asyncio.run(dedicated_all_main())
 
 partial_calls = []
 
@@ -626,8 +645,9 @@ with open(sys.argv[2], encoding="utf-8") as stream:
 
 agent = read_only["agents"]["list"][0]
 assert agent["id"] == "zhixun-water"
-assert agent["tools"]["allow"] == ["bundle-mcp"]
+assert agent["tools"]["allow"] == ["bundle-mcp", "message"]
 assert read_only["tools"]["profile"] == "messaging"
+assert read_only["messages"]["visibleReplies"] == "message_tool"
 
 feishu = read_only["channels"]["feishu"]
 assert feishu["dmPolicy"] == "open"
@@ -648,6 +668,7 @@ assert "dispatch_task_execute" in server["toolFilter"]["exclude"]
 assert "hydromodel_list" in server["toolFilter"]["exclude"]
 realtime_tools = {
     "realtime_forecast_health",
+    "run_all_realtime_forecasts",
     "run_realtime_forecast",
     "get_latest_realtime_forecast",
     "run_realtime_forecast_compat",
