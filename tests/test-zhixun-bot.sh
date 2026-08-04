@@ -20,7 +20,8 @@ grep -q 'Every successful reservoir, river-station, rainfall-station, or basin q
 grep -q 'related_page.url' openclaw-zhixun/workspace/AGENTS.md
 grep -q "never construct or guess a URL" openclaw-zhixun/workspace/AGENTS.md
 grep -q 'Always reply in Simplified Chinese' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'Always answer users in Simplified Chinese' openclaw-zhixun/workspace/SOUL.md
+grep -q 'Always answer users only in Simplified Chinese' openclaw-zhixun/workspace/SOUL.md
+grep -q '所有发送到飞书的用户可见文字必须使用简体中文' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'cp "${source_file}" "${target_file}"' docker/zhixun-bot/entrypoint.sh
 pass "shell and Node syntax"
 
@@ -52,6 +53,7 @@ assert mcp["command"][:2] == ["python", "mcp_entrypoint.py"]
 assert mcp["environment"]["ZHIXUN_CORE_BASE_URL"] == "https://ws.waterism.tech:8090/api/v2"
 assert mcp["environment"]["ZHIXUN_REALTIME_FORECAST_BASE_URL"] == "http://10.48.0.81:8097"
 assert mcp["environment"]["ZHIXUN_REALTIME_FORECAST_TIMEOUT"] == "120"
+assert mcp["environment"]["ZHIXUN_REALTIME_FORECAST_MODELS"] == "simplelstm,dhf,sms3-lag3,sms3-uhb"
 assert mcp["environment"]["ZHIXUN_MCP_STATION_INDEX_PATH"] == "/var/lib/zhixun-water-mcp/station-index.json"
 assert mcp["environment"]["ZHIXUN_MCP_STATION_INDEX_TTL_SECONDS"] == "86400"
 assert mcp["environment"]["ZHIXUN_MCP_STATION_INDEX_WORKERS"] == "12"
@@ -244,8 +246,9 @@ grep -q 'get_combined_forecast_timeseries' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'sms3-uhb' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'Never claim that a model succeeded' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'Never display only the first image' openclaw-zhixun/workspace/AGENTS.md
+grep -q "Never emit English progress narration" openclaw-zhixun/workspace/AGENTS.md
 grep -q 'never invent an image URL' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'plot.url' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'plot.native_image=attached' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'display the native image directly' openclaw-zhixun/workspace/SOUL.md
 pass "realtime forecast deployment contract and agent routing"
 
