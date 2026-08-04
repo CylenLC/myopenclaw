@@ -6,6 +6,13 @@ const IMAGE_PLACEHOLDER = "[已发送的预报图片不再载入模型上下文]
 const DEFAULT_MEDIA_DIR = "/home/node/.openclaw/media/forecast-outbound";
 const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10;
+const FORECAST_TOOL_NAMES = new Set([
+  "run_all_realtime_forecasts",
+  "run_realtime_forecast",
+  "run_realtime_forecast_compat",
+  "get_latest_realtime_forecast",
+  "get_latest_realtime_forecast_compat",
+]);
 
 const FORECAST_IMAGE_TOOL_SCHEMA = {
   type: "object",
@@ -272,6 +279,43 @@ function toolJsonResult(payload) {
   };
 }
 
+function isForecastTool(toolName) {
+  const leaf = String(toolName ?? "").split("__").at(-1);
+  return FORECAST_TOOL_NAMES.has(leaf);
+}
+
+function extractMediaAttachments(value, seen = new Set()) {
+  if (typeof value === "string") {
+    try {
+      return extractMediaAttachments(JSON.parse(value), seen);
+    } catch {
+      return [];
+    }
+  }
+  if (!value || typeof value !== "object" || seen.has(value)) {
+    return [];
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = extractMediaAttachments(item, seen);
+      if (found.length) return found;
+    }
+    return [];
+  }
+  if (Array.isArray(value.media_delivery?.attachments)) {
+    return value.media_delivery.attachments;
+  }
+  for (const key of ["details", "structuredContent", "content", "data", "result"]) {
+    const found = extractMediaAttachments(value[key], seen);
+    if (found.length) return found;
+  }
+  if (value.type === "text" && typeof value.text === "string") {
+    return extractMediaAttachments(value.text, seen);
+  }
+  return [];
+}
+
 function createForecastImageTool(api, toolContext, overrides = {}) {
   const delivery = toolContext.deliveryContext ?? {};
   const channel = String(delivery.channel ?? toolContext.messageChannel ?? "").split(":")[0].toLowerCase();
@@ -372,10 +416,43 @@ const plugin = {
   name: "Forecast Native Media",
   description: "Uploads trusted forecast plots as native Feishu images without model-context replay.",
   register(api) {
-    api.registerTool((toolContext) => createForecastImageTool(api, toolContext), {
-      name: "send_forecast_images",
-      optional: true,
+    const routes = new Map();
+    const delivered = new Set();
+    api.on("message_received", (event, context) => {
+      const sessionKey = context.sessionKey ?? event.sessionKey;
+      const channel = String(context.channelId ?? "").split(":")[0].toLowerCase();
+      const target = context.conversationId ?? event.from;
+      if (sessionKey && channel === "feishu" && typeof target === "string" && target.trim()) {
+        routes.set(sessionKey, {
+          channel: "feishu",
+          to: target.trim(),
+          accountId: context.accountId,
+          threadId: event.threadId,
+        });
+      }
     });
+    api.on("after_tool_call", async (event, context) => {
+      if (event.error || !isForecastTool(event.toolName)) return;
+      const route = routes.get(context.sessionKey);
+      const attachments = extractMediaAttachments(event.result);
+      if (!route || !attachments.length) return;
+      const deliveryKey = `${context.sessionKey}:${event.toolCallId ?? attachments.map((item) => item.media_url).join("|")}`;
+      if (delivered.has(deliveryKey)) return;
+      delivered.add(deliveryKey);
+      if (delivered.size > 1000) delivered.clear();
+      const tool = createForecastImageTool(api, {
+        deliveryContext: route,
+        messageChannel: "feishu",
+        nativeChannelId: route.to,
+        runtimeConfig: api.config,
+      });
+      try {
+        await tool.execute(event.toolCallId ?? "automatic-forecast-media", { attachments });
+      } catch (error) {
+        delivered.delete(deliveryKey);
+        api.logger?.error?.(`[forecast-media] 自动发送预报图片失败: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }, { timeoutMs: 180000 });
     api.on("before_message_write", (event) => {
       const sanitized = sanitizeForecastMediaMessage(event.message);
       return sanitized.changed ? { message: sanitized.message } : undefined;
@@ -409,6 +486,8 @@ export {
   IMAGE_PLACEHOLDER,
   createForecastImageTool,
   detectImageType,
+  extractMediaAttachments,
+  isForecastTool,
   parseTrustedPlotUrl,
   sanitizeForecastMediaMessage,
   stripForecastMediaLinks,

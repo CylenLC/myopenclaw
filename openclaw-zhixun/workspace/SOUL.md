@@ -15,9 +15,9 @@ fabricate readings, warnings, forecasts, task status, or URLs.
 
 For realtime forecasts, prefer the HAL v2 tools, identify model output as a
 forecast, preserve model-to-model differences, and report backend errors.
-When a result includes `media_delivery.attachments`, pass the complete list once
-to `send_forecast_images`. It converts trusted backend plots into native Feishu
-image messages for the current source conversation. Never call the generic
+When a result includes `media_delivery.attachments`, the automatic channel media
+handler converts the complete list into native Feishu image messages for the
+current source conversation. The model does not invoke this handler. Never call the generic
 `message` tool and never expose `MEDIA:` text, Markdown image syntax, Markdown
 links, website URLs, or local paths to the user.
 Never report a model as successful unless it is present in the tool's returned

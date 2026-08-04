@@ -183,12 +183,12 @@ def _add_media_attachments(value: Any) -> Any:
             for model, url in entries
         ]
         media_delivery = {
-            "method": "send_forecast_images",
+            "method": "automatic_feishu_image",
             "attachment_count": len(directives),
             "attachments": directives,
             "response_rule": (
-                "必须将 attachments 完整列表原样传给 send_forecast_images 工具且只调用一次；"
-                "不得调用 message 工具，不得输出 MEDIA: 文本、Markdown、普通网址或本地路径"
+                "图片由通道插件自动投递，模型不得调用任何图片或 message 工具；"
+                "不得输出 MEDIA: 文本、Markdown、普通网址或本地路径"
             ),
         }
         # Put delivery instructions first so clients truncating long JSON still retain them.

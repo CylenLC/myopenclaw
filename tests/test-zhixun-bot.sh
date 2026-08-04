@@ -37,6 +37,8 @@ import path from "node:path";
 import plugin, {
   IMAGE_PLACEHOLDER,
   createForecastImageTool,
+  extractMediaAttachments,
+  isForecastTool,
   parseTrustedPlotUrl,
   sanitizeForecastMediaMessage,
   stripForecastMediaLinks,
@@ -45,13 +47,9 @@ import { sanitizeTranscriptText } from "./docker/zhixun-bot/sanitize-forecast-se
 
 let beforeMessageWrite;
 let messageSending;
-let registeredToolFactory;
-let registeredToolOptions;
+let messageReceived;
+let afterToolCall;
 plugin.register({
-  registerTool(factory, options) {
-    registeredToolFactory = factory;
-    registeredToolOptions = options;
-  },
   on(name, handler) {
     if (name === "before_message_write") {
       beforeMessageWrite = handler;
@@ -59,15 +57,16 @@ plugin.register({
     if (name === "message_sending") {
       messageSending = handler;
     }
+    if (name === "message_received") messageReceived = handler;
+    if (name === "after_tool_call") afterToolCall = handler;
   },
 });
 assert.equal(typeof beforeMessageWrite, "function");
 assert.equal(typeof messageSending, "function");
-assert.equal(typeof registeredToolFactory, "function");
-assert.deepEqual(registeredToolOptions, {
-  name: "send_forecast_images",
-  optional: true,
-});
+assert.equal(typeof messageReceived, "function");
+assert.equal(typeof afterToolCall, "function");
+assert.equal(isForecastTool("mcp__water_unified__run_all_realtime_forecasts"), true);
+assert.equal(isForecastTool("get_station_timeseries"), false);
 
 const imageMessage = {
   role: "toolResult",
@@ -197,6 +196,7 @@ const attachments = ["simplelstm", "sms3-lag3", "sms3-uhb"].map((model) => ({
   model_name: model,
   media_url: `http://10.48.0.81:8097/plots/21401550_${model}_run.png`,
 }));
+assert.deepEqual(extractMediaAttachments({ content: [{ type: "text", text: JSON.stringify({ media_delivery: { attachments } }) }] }), attachments);
 const sendResult = await tool.execute("call-1", { attachments });
 assert.equal(sendCalls.length, 3);
 assert.deepEqual(sendResult.details.sent_models, ["simplelstm", "sms3-lag3", "sms3-uhb"]);
@@ -227,6 +227,34 @@ const contextFromFeishuRuntime = createForecastImageTool(mockApi, {
   nativeChannelId: "oc_runtime_chat",
 });
 assert.equal(contextFromFeishuRuntime.name, "send_forecast_images");
+
+const automaticHooks = {};
+const automaticApi = {
+  ...mockApi,
+  logger: { info() {}, error(message) { throw new Error(message); } },
+  on(name, handler) { automaticHooks[name] = handler; },
+};
+plugin.register(automaticApi);
+process.env.ZHIXUN_FORECAST_MEDIA_DIR = mediaDir;
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async () => new Response(png, {
+  status: 200,
+  headers: { "content-type": "image/png" },
+});
+automaticHooks.message_received(
+  { from: "ou_sender", sessionKey: "session-1" },
+  { channelId: "feishu", conversationId: "oc_current_chat", sessionKey: "session-1" },
+);
+await automaticHooks.after_tool_call(
+  {
+    toolName: "mcp__water_unified__run_all_realtime_forecasts",
+    toolCallId: "forecast-call-1",
+    result: { details: { media_delivery: { attachments } } },
+  },
+  { sessionKey: "session-1" },
+);
+globalThis.fetch = originalFetch;
+assert.equal(sendCalls.length, 6);
 await rm(mediaDir, { recursive: true, force: true });
 JS
 pass "forecast images use trusted local bytes and stay out of model context"
@@ -457,18 +485,18 @@ grep -q 'get_latest_realtime_forecast' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'get_combined_forecast_timeseries' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'sms3-uhb' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'Never claim that a model succeeded' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'call `send_forecast_images` exactly once' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'delivered automatically by the channel plugin' openclaw-zhixun/workspace/AGENTS.md
 grep -q "Never emit English progress narration" openclaw-zhixun/workspace/AGENTS.md
 grep -q 'never invent an image URL' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'intentionally has no' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'Never call the generic' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'Do not call or mention' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'attempted_models' openclaw-zhixun/workspace/AGENTS.md
 grep -q '不得使用此前轮次' openclaw-zhixun/workspace/AGENTS.md
 grep -q '逐个时间点' openclaw-zhixun/workspace/AGENTS.md
 grep -q '超出返回的预报时段' openclaw-zhixun/workspace/AGENTS.md
 grep -q '计划句' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'mode="full"' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'pass the complete list once' openclaw-zhixun/workspace/SOUL.md
+grep -q 'The model does not invoke this handler' openclaw-zhixun/workspace/SOUL.md
 pass "realtime forecast deployment contract and agent routing"
 
 python3 - <<'PY'
@@ -576,7 +604,7 @@ async def main():
     assert runtime["compat_version"] == "2026-08-04-native-image-timeseries-v3"
     assert runtime["configured_models"] == calls
     assert runtime["requested_model_name"] == "all"
-    assert delivery["method"] == "send_forecast_images"
+    assert delivery["method"] == "automatic_feishu_image"
     assert delivery["attachment_count"] == 4
     attachments = delivery["attachments"]
     assert [item["model_name"] for item in attachments] == calls
@@ -909,7 +937,7 @@ with open(sys.argv[2], encoding="utf-8") as stream:
 
 agent = read_only["agents"]["list"][0]
 assert agent["id"] == "zhixun-water"
-assert agent["tools"]["allow"] == ["bundle-mcp", "send_forecast_images"]
+assert agent["tools"]["allow"] == ["bundle-mcp"]
 assert read_only["tools"]["profile"] == "messaging"
 assert read_only["messages"]["visibleReplies"] == "automatic"
 assert read_only["messages"]["groupChat"]["visibleReplies"] == "automatic"

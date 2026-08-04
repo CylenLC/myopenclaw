@@ -216,8 +216,10 @@ ZHIXUN_REALTIME_FORECAST_TIMEOUT=120
 `ZHIXUN_REALTIME_FORECAST_BASE_URL` 的完整 URL，并在工具结果的
 `media_delivery.attachments` 中为每张图片返回 `media_url`。由于示例地址是
 内网 HTTP，不能直接交给 OpenClaw 通用媒体加载器：其 SSRF 防护会拒绝私网地址，
-飞书适配器随后会降级成 Markdown 链接。机器人改用本地
-`send_forecast_images` 工具，将完整附件列表一次传入：
+飞书适配器随后会降级成 Markdown 链接。当前实现参考 RealTimeForecast 机器人，
+把图片投递改成确定性通道处理：OpenClaw 插件在 MCP 预报工具返回后自动读取完整
+附件列表，下载图片字节，并通过飞书原生媒体适配器上传和发送。模型不调用图片
+工具，也不会把图片载入上下文。MCP 返回的附件结构如下：
 
 ```json
 {
@@ -406,9 +408,9 @@ git pull --ff-only origin feat/realtime-forecast-mcp
 - MCP 端口和 OpenClaw Gateway 端口均不发布到宿主机。
 - 飞书机器人可被加入任意群，并接受所有私聊；群内仍要求 `@机器人`。这会让
   所有可联系或拉入机器人的飞书用户调用 zhixun MCP，请仅向信任的组织成员发布。
-- OpenClaw 工具策略只允许 `bundle-mcp` 和只能向当前可信会话发送预报图的
-  `send_forecast_images`；通用 `message` 不开放，防止模型再次把内网 URL 交给
-  会降级为链接的旧链路。飞书
+- OpenClaw 工具策略只允许 `bundle-mcp`；通道插件根据当前入站会话自动发送
+  预报图，通用 `message` 和模型可调用的图片工具均不开放，防止模型再次把内网
+  URL 交给会降级为链接的旧链路。飞书
   文档、云盘、知识库、群管理等原生工具全部关闭。
 - 如果服务器需要跨主机访问 MCP，应增加 TLS 和认证；当前配置只支持同一
   Docker 网络内访问。
