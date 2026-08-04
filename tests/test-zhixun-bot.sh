@@ -241,9 +241,12 @@ grep -q 'mcp_server_realtime_forecast.py' scripts/start-zhixun-bot.sh
 grep -q 'run_realtime_forecast' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'get_latest_realtime_forecast' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'get_combined_forecast_timeseries' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'never invent a URL' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'sms3-uhb' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'Never claim that a model succeeded' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'Never display only the first image' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'never invent an image URL' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'plot.url' openclaw-zhixun/workspace/AGENTS.md
-grep -q '降雨径流过程图' openclaw-zhixun/workspace/SOUL.md
+grep -q 'display the native image directly' openclaw-zhixun/workspace/SOUL.md
 pass "realtime forecast deployment contract and agent routing"
 
 python3 - <<'PY'

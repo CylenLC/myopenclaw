@@ -6,10 +6,13 @@ relative URL.  The Feishu agent needs an absolute URL that it can render.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from functools import wraps
+import re
 from typing import Any
 
+import httpx
+from mcp.server.fastmcp.utilities.types import Image
+from mcp.types import TextContent
 
 def _absolute_url(value: Any, base_url: str) -> Any:
     if isinstance(value, str) and value.startswith("/"):
@@ -28,8 +31,40 @@ def _absolute_url(value: Any, base_url: str) -> Any:
     return value
 
 
+def _plot_urls(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        urls = []
+        for key, item in value.items():
+            if key in {"url", "plot_url", "image_url"} and isinstance(item, str):
+                if item.startswith(("http://", "https://")) and item.lower().split("?", 1)[0].endswith(
+                    (".png", ".jpg", ".jpeg", ".webp", ".gif")
+                ):
+                    urls.append(item)
+            else:
+                urls.extend(_plot_urls(item))
+        return urls
+    if isinstance(value, list):
+        return [url for item in value for url in _plot_urls(item)]
+    return []
+
+
 def install(module: Any, base_url: str) -> None:
     """Wrap forecast tools so returned ``plot.url`` values are absolute."""
+
+    def validate_model_name(value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        normalized = value.strip().lower()
+        if normalized in {"simplelstm", "dhf"} or re.fullmatch(
+            r"sms3-[a-z0-9-]+", normalized
+        ):
+            return normalized
+        raise ValueError(
+            "model_name 仅支持 simplelstm、dhf 或 zhixun-core 已注册的 sms3-* 模型"
+        )
+
+    if hasattr(module, "_validate_model_name"):
+        module._validate_model_name = validate_model_name
 
     names = (
         "run_realtime_forecast",
@@ -45,7 +80,30 @@ def install(module: Any, base_url: str) -> None:
         @wraps(function)
         async def wrapped(*args: Any, __function=function, **kwargs: Any) -> Any:
             result = await __function(*args, **kwargs)
-            return _absolute_url(result, base_url)
+            normalized = _absolute_url(result, base_url)
+            images = []
+            async with httpx.AsyncClient(timeout=30) as client:
+                for index, url in enumerate(dict.fromkeys(_plot_urls(normalized)), start=1):
+                    try:
+                        response = await client.get(url)
+                        response.raise_for_status()
+                        images.append(
+                            (
+                                TextContent(
+                                    type="text",
+                                    text=f"降雨径流过程图 {index}: {url}",
+                                ),
+                                Image(data=response.content, format="png"),
+                            )
+                        )
+                    except httpx.HTTPError:
+                        # Keep the URL in the JSON result if image retrieval fails.
+                        continue
+            return (
+                [normalized, *(block for pair in images for block in pair)]
+                if images
+                else normalized
+            )
 
         wrapped._plot_url_compat = True
         setattr(module, name, wrapped)
