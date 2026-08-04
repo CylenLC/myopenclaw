@@ -37,9 +37,22 @@ if [[ "${zhixun_path}" != /* ]]; then
   zhixun_path="${REPO_ROOT}/${zhixun_path}"
 fi
 
-if [[ ! -f "${zhixun_path}/mcp_servers/water/mcp_server_unified.py" ]]; then
+required_zhixun_files=(
+  mcp_servers/water/mcp_server_unified.py
+  mcp_servers/water/mcp_server_realtime_forecast.py
+)
+
+missing_zhixun_files=()
+for relative_path in "${required_zhixun_files[@]}"; do
+  if [[ ! -f "${zhixun_path}/${relative_path}" ]]; then
+    missing_zhixun_files+=("${relative_path}")
+  fi
+done
+
+if (( ${#missing_zhixun_files[@]} > 0 )); then
   echo "❌ ZHIXUN_AGENT_PATH 无效: ${zhixun_path}"
-  echo "   需要新版 zhixun-agent，并包含 mcp_servers/water/mcp_server_unified.py。"
+  echo "   请切换 zhixun-agent 到 feat/realtime-forecast-mcp，缺少文件："
+  printf '   - %s\n' "${missing_zhixun_files[@]}"
   exit 1
 fi
 

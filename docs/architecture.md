@@ -32,7 +32,7 @@ myopenclaw 由主栈 14 个 Docker 服务 + zhixun 独立栈 2 个服务组成�
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| zhixun-water-mcp | 18201 | 水文 MCP 服务（43 tools），包装 zhixun-agent 源码 + v2 兼容层 |
+| zhixun-water-mcp | 18201 | 水文 MCP 服务（注册 69 tools，默认向机器人开放 54），含实时预报、zhixun-agent 源码 + v2 兼容层 |
 | openclaw-zhixun | 18791 | OpenClaw gateway（知汛助手），飞书 bot，仅 MCP 工具无代码执行 |
 
 ## 数据目录映射

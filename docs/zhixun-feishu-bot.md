@@ -32,7 +32,8 @@ cd /srv/agents
 git clone git@github.com:CylenLC/myopenclaw.git
 git clone git@gitcode.com:dlut-water/zhixun-agent.git
 cd myopenclaw
-git switch feat/zhixun-feishu-bot
+git switch feat/realtime-forecast-mcp
+git -C ../zhixun-agent switch feat/realtime-forecast-mcp
 ```
 
 要求：
@@ -55,6 +56,7 @@ zhixun-agent 使用纯 MCP 目录结构，必须包含：
 
 ```text
 mcp_servers/water/mcp_server_unified.py
+mcp_servers/water/mcp_server_realtime_forecast.py
 ```
 
 MCP 镜像由 myopenclaw 中的 `docker/zhixun-bot/Dockerfile.mcp` 构建，通过
@@ -73,6 +75,8 @@ Compose 的附加构建上下文读取 zhixun-agent 源码，不依赖 zhixun-ag
 
 ```dotenv
 ZHIXUN_CORE_BASE_URL=https://ws.waterism.tech:8090/api/v2
+ZHIXUN_REALTIME_FORECAST_BASE_URL=http://10.48.0.81:8097
+ZHIXUN_REALTIME_FORECAST_TIMEOUT=120
 ZHIXUN_BOT_MCP_DATA_DIR=/srv/myopenclaw-data/zhixun-water-mcp
 ZHIXUN_MCP_STATION_INDEX_TTL_SECONDS=86400
 ZHIXUN_MCP_STATION_INDEX_WORKERS=12
@@ -162,6 +166,52 @@ ZHIXUN_BOT_ENABLE_WRITE_TOOLS=true
 `_embedded.hydromodels` 的解析，并在水库详情没有单独 `basin_id` 时使用水库站码
 作为流域编码。
 
+## 实时预报
+
+实时预报已通过 zhixun-agent 的统一 Water MCP 注册，不需要再运行
+18202 独立 MCP 端口。`zhixun-water-mcp` 容器会直接请求模型运行时：
+
+```text
+openclaw-zhixun
+  └─ water_unified (SSE, container port 18201)
+       └─ realtime forecast runtime (HTTP, default 10.48.0.81:8097)
+```
+
+可配置：
+
+```dotenv
+ZHIXUN_REALTIME_FORECAST_BASE_URL=http://10.48.0.81:8097
+ZHIXUN_REALTIME_FORECAST_TIMEOUT=120
+```
+
+后端地址必须能从 Docker 容器内访问；如服务只监听在 Docker 宿主机，
+可根据服务器网络改为 `http://host.docker.internal:8097`，Linux 上则需同时
+配置 host-gateway，或直接使用宿主机在 Docker 网桥上可达的 IP。
+
+机器人优先使用 HAL v2 工具：
+
+- `run_realtime_forecast`：运行未来 48 小时实时流量预报；
+- `get_latest_realtime_forecast`：按测站、起报时间或模型查询最新结果。
+
+兼容工具只在专门验证旧 RealTimeForecast 客户端时使用。支持的模型为
+`simplelstm` 和 `dhf`；不指定模型时运行后端全部可用模型。起报时间按
+北京时间传入 `YYYY-MM-DD HH:MM`。
+
+如后端开启 `FORECAST_PLOT_ENABLED=true`，每个成功预报结果会包含
+`plot.url`，例如 `/plots/21401550_simplelstm_<run_id>.png`。MCP 兼容层会自动补全为
+`ZHIXUN_REALTIME_FORECAST_BASE_URL` 的完整 URL，机器人会按模型输出图片：
+
+```markdown
+![降雨径流过程图](http://10.48.0.81:8097/plots/21401550_simplelstm_<run_id>.png)
+```
+
+如果 `plot.url` 不存在，只返回数值结果，不猜测或构造图片地址。
+在 zhixun-core 中需确认：
+
+```dotenv
+FORECAST_PLOT_ENABLED=true
+```
+
 ## 启动
 
 首次部署或 zhixun 代码更新后：
@@ -199,6 +249,35 @@ docker compose \
   node /app/openclaw.mjs mcp probe water_unified --json
 ```
 
+输出中应包含以下 11 个工具：
+
+```text
+realtime_forecast_health
+run_realtime_forecast
+get_latest_realtime_forecast
+run_realtime_forecast_compat
+get_latest_realtime_forecast_compat
+get_combined_forecast_timeseries
+get_observed_flow_timeseries
+get_gfs_forecast_timeseries
+get_ifs_forecast_timeseries
+get_actual_precip_compatible_timeseries
+get_mswep_precip_timeseries
+```
+
+统一 MCP 共注册 69 个工具。默认只读配置过滤 15 个会商/调度/条目写工具后，
+OpenClaw probe 应看到 54 个；上述 11 个实时预报工具均保留。
+
+从 MCP 容器内验证后端健康状态：
+
+```bash
+docker compose \
+  --env-file .env.zhixun-bot \
+  -f docker-compose.zhixun-bot.yml \
+  exec zhixun-water-mcp \
+  python -c 'import asyncio, json; from mcp_server_realtime_forecast import realtime_forecast_health; print(json.dumps(asyncio.run(realtime_forecast_health()), ensure_ascii=False, indent=2))'
+```
+
 查看日志：
 
 ```bash
@@ -217,6 +296,28 @@ docker compose \
 机器人会响应任意私聊，也会响应任意已加入机器人的群；为避免群内每条消息都
 触发，群聊仍必须 `@机器人`。
 
+### 飞书端测试问题
+
+以下问题从基础连通、单模型、多模型、历史结果到输入时序逐层覆盖。
+群聊时在每句前加 `@知汛助手`：
+
+1. `请检查实时预报服务是否健康，列出已注册测站和模型状态。`
+2. `请对测站 21401550 运行起报时间为 2026-04-17 14:00 的 simplelstm 实时预报，汇报洪峰流量、洪峰时间、预报时段和 run_id。`
+3. `请对测站 21401550 以 2026-04-17 14:00 为起报时间运行全部可用模型，逐一对比 simplelstm 和 dhf 的洪峰流量、洪峰时间和报错，不要对两个模型取平均。`
+4. `查询测站 21401550 最新的 dhf 实时预报结果，说明它的起报时间、洪峰和数据来源。`
+5. `查询测站 21401550 在 2026-04-17 14:00 起报的最新预报，将各模型结果分开列出，并单独列出 errors。`
+6. `获取流域 21401550 从 2026-04-01 到 2026-04-11 的 48 小时合并时序，说明 obs、GFS、IFS、MSWEP 和实测流量各有多少个时次。`
+7. `查询测站 21401550 从 2026-04-01 到 2026-04-11 的实测入库流量 inq 时序，给出时间范围、最小值、最大值及对应时间。`
+8. `分别查询流域 21401550 在 2026-04-01 到 2026-04-11 的 GFS 和 IFS 48 小时降雨预报时序，对比同一时次的差异。`
+9. `查询测站 21401550 在 2026-04-17 14:00 这一时次的 MSWEP 3 小时面均降雨。`
+10. `查询测站 21401550 从 2026-04-01 到 2026-04-11 的 MSWEP 面均降雨区间时序，汇总累计降雨量和最大 3 小时降雨。`
+11. `请尝试用不支持的模型 xgboost 对测站 21401550 运行实时预报，不要自动替换模型，说明参数错误。`
+12. `请用旧 RealTimeForecast 兼容接口查询测站 21401550 的最新 simplelstm 结果，并说明返回结构与 HAL v2 的差别。`
+
+第 2–10 题应使用 HAL 或时序工具；第 12 题因明确要求旧接口，才应调用
+`get_latest_realtime_forecast_compat`。第 11 题应返回支持的模型范围，不应静默改成
+`simplelstm` 或 `dhf`。
+
 ## 停止与更新
 
 停止：
@@ -231,8 +332,12 @@ docker compose \
 更新：
 
 ```bash
-git -C ../zhixun-agent pull --ff-only
-git pull --ff-only
+git -C ../zhixun-agent fetch origin
+git -C ../zhixun-agent switch feat/realtime-forecast-mcp
+git -C ../zhixun-agent pull --ff-only origin feat/realtime-forecast-mcp
+git fetch origin
+git switch feat/realtime-forecast-mcp
+git pull --ff-only origin feat/realtime-forecast-mcp
 ./scripts/start-zhixun-bot.sh --build
 ```
 

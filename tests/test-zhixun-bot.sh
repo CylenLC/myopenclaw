@@ -19,6 +19,8 @@ node --check docker/zhixun-bot/render-config.mjs
 grep -q 'Every successful reservoir, river-station, rainfall-station, or basin query' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'related_page.url' openclaw-zhixun/workspace/AGENTS.md
 grep -q "never construct or guess a URL" openclaw-zhixun/workspace/AGENTS.md
+grep -q 'Always reply in Simplified Chinese' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'Always answer users in Simplified Chinese' openclaw-zhixun/workspace/SOUL.md
 grep -q 'cp "${source_file}" "${target_file}"' docker/zhixun-bot/entrypoint.sh
 pass "shell and Node syntax"
 
@@ -48,6 +50,8 @@ assert build["args"]["PIP_INDEX_URL"] == "https://pypi.tuna.tsinghua.edu.cn/simp
 assert mcp["working_dir"] == "/app/mcp_servers/water"
 assert mcp["command"][:2] == ["python", "mcp_entrypoint.py"]
 assert mcp["environment"]["ZHIXUN_CORE_BASE_URL"] == "https://ws.waterism.tech:8090/api/v2"
+assert mcp["environment"]["ZHIXUN_REALTIME_FORECAST_BASE_URL"] == "http://10.48.0.81:8097"
+assert mcp["environment"]["ZHIXUN_REALTIME_FORECAST_TIMEOUT"] == "120"
 assert mcp["environment"]["ZHIXUN_MCP_STATION_INDEX_PATH"] == "/var/lib/zhixun-water-mcp/station-index.json"
 assert mcp["environment"]["ZHIXUN_MCP_STATION_INDEX_TTL_SECONDS"] == "86400"
 assert mcp["environment"]["ZHIXUN_MCP_STATION_INDEX_WORKERS"] == "12"
@@ -229,7 +233,18 @@ finally:
 PY
 grep -q 'briefing_compat.py' docker/zhixun-bot/Dockerfile.mcp
 grep -q 'install_briefing_compat' docker/zhixun-bot/mcp_entrypoint.py
+grep -q 'realtime_forecast_compat.py' docker/zhixun-bot/Dockerfile.mcp
+grep -q 'install_realtime_forecast_compat' docker/zhixun-bot/mcp_entrypoint.py
 pass "briefing hydromodel v2 compatibility and routing guidance"
+
+grep -q 'mcp_server_realtime_forecast.py' scripts/start-zhixun-bot.sh
+grep -q 'run_realtime_forecast' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'get_latest_realtime_forecast' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'get_combined_forecast_timeseries' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'never invent a URL' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'plot.url' openclaw-zhixun/workspace/AGENTS.md
+grep -q '降雨径流过程图' openclaw-zhixun/workspace/SOUL.md
+pass "realtime forecast deployment contract and agent routing"
 
 python3 - <<'PY'
 import asyncio
@@ -491,6 +506,20 @@ server = read_only["mcp"]["servers"]["water_unified"]
 assert server["url"] == "http://zhixun-water-mcp:18201/sse"
 assert "dispatch_task_execute" in server["toolFilter"]["exclude"]
 assert "hydromodel_list" in server["toolFilter"]["exclude"]
+realtime_tools = {
+    "realtime_forecast_health",
+    "run_realtime_forecast",
+    "get_latest_realtime_forecast",
+    "run_realtime_forecast_compat",
+    "get_latest_realtime_forecast_compat",
+    "get_combined_forecast_timeseries",
+    "get_observed_flow_timeseries",
+    "get_gfs_forecast_timeseries",
+    "get_ifs_forecast_timeseries",
+    "get_actual_precip_compatible_timeseries",
+    "get_mswep_precip_timeseries",
+}
+assert realtime_tools.isdisjoint(server["toolFilter"]["exclude"])
 assert "toolFilter" not in write_enabled["mcp"]["servers"]["water_unified"]
 
 serialized = json.dumps(read_only)
