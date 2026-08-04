@@ -440,6 +440,7 @@ grep -q 'briefing_compat.py' docker/zhixun-bot/Dockerfile.mcp
 grep -q 'install_briefing_compat' docker/zhixun-bot/mcp_entrypoint.py
 grep -q 'realtime_forecast_compat.py' docker/zhixun-bot/Dockerfile.mcp
 grep -q 'install_realtime_forecast_compat' docker/zhixun-bot/mcp_entrypoint.py
+grep -q 'install_all_points_contract' docker/zhixun-bot/mcp_entrypoint.py
 pass "briefing hydromodel v2 compatibility and routing guidance"
 
 grep -q 'mcp_server_realtime_forecast.py' scripts/start-zhixun-bot.sh
@@ -455,11 +456,17 @@ grep -q 'never invent an image URL' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'intentionally has no' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'Never call the generic' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'attempted_models' openclaw-zhixun/workspace/AGENTS.md
+grep -q '不得使用此前轮次' openclaw-zhixun/workspace/AGENTS.md
+grep -q '逐个时间点' openclaw-zhixun/workspace/AGENTS.md
+grep -q '超出返回的预报时段' openclaw-zhixun/workspace/AGENTS.md
+grep -q '计划句' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'mode="full"' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'pass the complete list once' openclaw-zhixun/workspace/SOUL.md
 pass "realtime forecast deployment contract and agent routing"
 
 python3 - <<'PY'
 import asyncio
+from datetime import datetime, timedelta
 import importlib.util
 import json
 import os
@@ -485,6 +492,16 @@ async def run_realtime_forecast(
                     "station_id": station_id,
                     "model_name": model_name,
                     "peak_m3s": 1.0,
+                    "forecast": [
+                        {
+                            "time": (
+                                datetime(2026, 8, 4, 20) + timedelta(hours=index * 3)
+                            ).strftime("%Y-%m-%d %H:%M:%S"),
+                            "lead_hours": index * 3,
+                            "pred_m3s": float(index),
+                        }
+                        for index in range(16)
+                    ],
                     "plot": {
                         "file_path": f"/tmp/{model_name}.png",
                         "url": f"/plots/{station_id}_{model_name}_run.png",
@@ -501,10 +518,24 @@ async def get_latest_realtime_forecast(
 ):
     return await run_realtime_forecast(station_id, reference_time, model_name)
 
+async def get_observed_flow_timeseries(start_time, end_time, station_id="21401550"):
+    return {
+        "station_id": station_id,
+        "start_time": start_time,
+        "end_time": end_time,
+        "count": 3,
+        "data": [
+            {"time": "2026-08-01 00:00:00", "inq": 1.1},
+            {"time": "2026-08-01 03:00:00", "inq": 1.2},
+            {"time": "2026-08-01 06:00:00", "inq": 1.3},
+        ],
+    }
+
 bridge = SimpleNamespace(
     _validate_model_name=lambda value: value,
     run_realtime_forecast=run_realtime_forecast,
     get_latest_realtime_forecast=get_latest_realtime_forecast,
+    get_observed_flow_timeseries=get_observed_flow_timeseries,
 )
 
 os.environ["ZHIXUN_REALTIME_FORECAST_MODELS"] = (
@@ -535,7 +566,7 @@ async def main():
     assert summary["successful_models"] == calls
     delivery = result["media_delivery"]
     runtime = result["realtime_forecast_mcp_runtime"]
-    assert runtime["compat_version"] == "2026-08-04-native-image-v2"
+    assert runtime["compat_version"] == "2026-08-04-native-image-timeseries-v3"
     assert runtime["configured_models"] == calls
     assert runtime["requested_model_name"] == "all"
     assert delivery["method"] == "send_forecast_images"
@@ -549,6 +580,9 @@ async def main():
     assert all(set(item) == {"model_name", "media_url"} for item in attachments)
     assert all("url" not in row["plot"] for row in result["data"]["results"])
     assert all(row["plot"]["media_attachment"] == "available" for row in result["data"]["results"])
+    point_contract = result["time_series_response_contract"]
+    assert point_contract["must_list_every_point"] is True
+    assert [item["point_count"] for item in point_contract["returned_series"]] == [16, 16, 16, 16]
     json.dumps(result, ensure_ascii=False)
 
 asyncio.run(main())
@@ -563,6 +597,27 @@ async def dedicated_all_main():
     assert result["realtime_forecast_mcp_runtime"]["requested_model_name"] == "all"
 
 asyncio.run(dedicated_all_main())
+
+async def observed_points_main():
+    result = await bridge.get_observed_flow_timeseries(
+        start_time="2026-08-01",
+        end_time="2026-08-04",
+        station_id="21401550",
+    )
+    contract = result["time_series_response_contract"]
+    assert contract["version"] == "all-points-v1"
+    assert contract["tool_name"] == "get_observed_flow_timeseries"
+    assert contract["returned_series"] == [
+        {
+            "path": "data",
+            "point_count": 3,
+            "time_fields": ["time"],
+            "value_fields": ["inq"],
+        }
+    ]
+    assert "逐点完整列出" in bridge.get_observed_flow_timeseries.__doc__
+
+asyncio.run(observed_points_main())
 
 partial_calls = []
 

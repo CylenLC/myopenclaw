@@ -6,7 +6,10 @@ import asyncio
 import utils_xz
 from briefing_compat import install as install_briefing_compat
 from related_page_compat import install as install_related_pages
-from realtime_forecast_compat import install as install_realtime_forecast_compat
+from realtime_forecast_compat import (
+    install as install_realtime_forecast_compat,
+    install_all_points_contract,
+)
 from zhixun_core_v2_compat import install
 
 
@@ -19,6 +22,18 @@ import mcp_server_xz
 
 # Patch functions before mcp_server_unified imports and registers them.
 install_related_pages(mcp_server_xz, get_url_server)
+install_all_points_contract(
+    mcp_server_xz,
+    {
+        "get_station_timeseries",
+        "get_reservoir_profile",
+        "get_river_historical_comparison",
+        "get_basin_rainfall_summary",
+        "get_basin_rainfall_forecast",
+        "get_basin_rainfall_complete",
+        "get_rainfall_statistics",
+    },
+)
 install_briefing_compat(mcp_server_briefing)
 install_realtime_forecast_compat(
     mcp_server_realtime_forecast,

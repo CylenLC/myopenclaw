@@ -1,8 +1,9 @@
 """Compatibility helpers for realtime forecast models and plot delivery.
 
 zhixun-core stores plots under its static ``/plots`` mount and may return a
-relative URL. OpenClaw needs the absolute URL in the structured ``message``
-tool's media parameter so its Feishu adapter can upload a native image message.
+relative URL. The local native-media tool needs the absolute URL to download,
+validate, and upload each plot as a Feishu image message. Returned time series
+also carry an explicit all-points response contract.
 """
 
 from __future__ import annotations
@@ -14,7 +15,17 @@ import re
 from typing import Any
 
 
-COMPAT_VERSION = "2026-08-04-native-image-v2"
+COMPAT_VERSION = "2026-08-04-native-image-timeseries-v3"
+TIME_FIELDS = ("time", "tm", "timestamp", "forecast_time", "date", "period_label")
+FORECAST_SERIES_KEYS = {"forecast", "output_series"}
+TIMESERIES_TOOL_NAMES = {
+    "get_combined_forecast_timeseries",
+    "get_observed_flow_timeseries",
+    "get_gfs_forecast_timeseries",
+    "get_ifs_forecast_timeseries",
+    "get_actual_precip_compatible_timeseries",
+    "get_mswep_precip_timeseries",
+}
 
 
 def _absolute_url(value: Any, base_url: str) -> Any:
@@ -188,6 +199,96 @@ def _add_runtime_config(
     return value
 
 
+def _find_time_series(value: Any, *, forecast_only: bool = False) -> list[dict[str, Any]]:
+    """Describe returned time-series arrays so the model cannot silently summarize them."""
+
+    found: list[dict[str, Any]] = []
+
+    def walk(current: Any, path: tuple[str, ...]) -> None:
+        if isinstance(current, dict):
+            for key, item in current.items():
+                if key in {"input_detail", "hindcast", "media_delivery"}:
+                    continue
+                walk(item, (*path, str(key)))
+            return
+        if not isinstance(current, list) or not current:
+            return
+        if all(isinstance(item, dict) for item in current):
+            keys = {str(key) for item in current for key in item}
+            time_fields = [field for field in TIME_FIELDS if field in keys]
+            path_key = path[-1] if path else ""
+            if time_fields and (not forecast_only or path_key in FORECAST_SERIES_KEYS):
+                excluded = set(time_fields) | {"lead_hours", "lead_time"}
+                found.append(
+                    {
+                        "path": ".".join(path),
+                        "point_count": len(current),
+                        "time_fields": time_fields,
+                        "value_fields": sorted(keys - excluded),
+                    }
+                )
+                return
+        for index, item in enumerate(current):
+            walk(item, (*path, str(index)))
+
+    walk(value, ())
+    return found
+
+
+def _add_all_points_contract(
+    value: Any,
+    tool_name: str,
+    *,
+    forecast_only: bool | None = None,
+) -> Any:
+    if not isinstance(value, dict):
+        return value
+    if forecast_only is None:
+        forecast_only = tool_name not in TIMESERIES_TOOL_NAMES
+    series = _find_time_series(value, forecast_only=forecast_only)
+    value["time_series_response_contract"] = {
+        "version": "all-points-v1",
+        "tool_name": tool_name,
+        "must_list_every_point": True,
+        "summary_only_forbidden": True,
+        "ellipsis_forbidden": True,
+        "returned_series": series,
+        "response_rule": (
+            "回答径流或降雨时，必须按原顺序列出 returned_series 对应数组中的每一个时间点、"
+            "数值和单位；不得只给范围、累计值、极值、洪峰或“与之前一致”，不得使用省略号。"
+            "若用户要求的时段超出返回数据覆盖范围，完整列出已有点后明确说明缺失起止时段，"
+            "不得把较短预报冒充完整时段。"
+        ),
+    }
+    return value
+
+
+def install_all_points_contract(module: Any, tool_names: set[str]) -> None:
+    """Wrap tools that return historical runoff/rainfall arrays."""
+
+    for name in tool_names:
+        function = getattr(module, name, None)
+        if function is None or getattr(function, "_all_points_contract", False):
+            continue
+
+        @wraps(function)
+        async def wrapped_timeseries(
+            *args: Any,
+            __function=function,
+            __name=name,
+            **kwargs: Any,
+        ) -> Any:
+            result = await __function(*args, **kwargs)
+            return _add_all_points_contract(result, __name, forecast_only=False)
+
+        wrapped_timeseries._all_points_contract = True
+        wrapped_timeseries.__doc__ = (
+            (wrapped_timeseries.__doc__ or "").rstrip()
+            + "\n\n返回 time_series_response_contract；回答必须逐点完整列出，不得摘要省略。"
+        )
+        setattr(module, name, wrapped_timeseries)
+
+
 def install(module: Any, base_url: str) -> None:
     """Wrap forecast tools for explicit all-model runs and Feishu plot media."""
 
@@ -271,6 +372,7 @@ def install(module: Any, base_url: str) -> None:
             else:
                 result = await __function(*args, **kwargs)
             normalized = _add_media_attachments(_absolute_url(result, base_url))
+            normalized = _add_all_points_contract(normalized, __name)
             return _add_runtime_config(normalized, configured_models, requested_model)
 
         wrapped._plot_url_compat = True
@@ -312,3 +414,5 @@ def install(module: Any, base_url: str) -> None:
             )
 
         module.run_all_realtime_forecasts = run_all_realtime_forecasts
+
+    install_all_points_contract(module, TIMESERIES_TOOL_NAMES)

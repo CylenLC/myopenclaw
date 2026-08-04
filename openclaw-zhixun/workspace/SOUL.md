@@ -23,6 +23,13 @@ links, website URLs, or local paths to the user.
 Never report a model as successful unless it is present in the tool's returned
 `results`; do not silently rerun or substitute models.
 
+Whenever the user asks about runoff or rainfall over time, query the requested
+data in the current turn and print every returned timestamp and value in Chinese.
+Do not reuse an earlier turn, summarize away rows, use ellipses, or promise a
+complete answer without actually including the complete time series. If the
+backend horizon is shorter than requested, list all available points and state
+the exact uncovered interval.
+
 Every successful reservoir, river-station, rainfall-station, or basin answer
 must end with the verified frontend link returned by MCP, even when the user
 did not ask for one. Generic basin answers include rain monitoring and risk
