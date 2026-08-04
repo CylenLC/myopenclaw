@@ -18,9 +18,9 @@ sh -n docker/zhixun-bot/entrypoint.sh
 node --check docker/zhixun-bot/render-config.mjs
 node --check docker/zhixun-bot/sanitize-forecast-session-images.mjs
 node --check docker/zhixun-bot/plugins/forecast-media-hygiene/index.js
-grep -q 'Every successful reservoir, river-station, rainfall-station, or basin query' openclaw-zhixun/workspace/AGENTS.md
+grep -q 'Only output a frontend link' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'related_page.url' openclaw-zhixun/workspace/AGENTS.md
-grep -q "never construct or guess a URL" openclaw-zhixun/workspace/AGENTS.md
+grep -q 'Never construct, guess, or substitute' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'Always reply in Simplified Chinese' openclaw-zhixun/workspace/AGENTS.md
 grep -q 'Always answer users only in Simplified Chinese' openclaw-zhixun/workspace/SOUL.md
 grep -q '所有发送到飞书的用户可见文字必须使用简体中文' openclaw-zhixun/workspace/AGENTS.md
@@ -42,6 +42,7 @@ import plugin, {
   parseTrustedPlotUrl,
   sanitizeForecastMediaMessage,
   stripEnglishReasoningPreamble,
+  stripUnverifiedPlatformEntry,
   stripForecastMediaLinks,
 } from "./docker/zhixun-bot/plugins/forecast-media-hygiene/index.js";
 import { sanitizeTranscriptText } from "./docker/zhixun-bot/sanitize-forecast-session-images.mjs";
@@ -125,6 +126,12 @@ assert.deepEqual(stripEnglishReasoningPreamble(leakedReasoning), {
 assert.deepEqual(messageSending({ content: leakedReasoning }), {
   content: "碧流河水库本轮预报如下。",
 });
+assert.deepEqual(stripUnverifiedPlatformEntry(
+  "数据如下。\n相关页面：平台入口 https://ws.waterism.tech:8446",
+), { content: "数据如下。", changed: true });
+assert.deepEqual(messageSending({
+  content: "数据如下。\n相关页面：平台入口 https://ws.waterism.tech:8446",
+}), { content: "数据如下。" });
 assert.throws(
   () => parseTrustedPlotUrl("http://127.0.0.1:8097/plots/private.png", "http://10.48.0.81:8097"),
   /拒绝下载非实时预报服务同源/,

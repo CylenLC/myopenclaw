@@ -182,6 +182,18 @@ function stripEnglishReasoningPreamble(content) {
   return { content: lines.slice(chineseStart).join("\n").trim(), changed: true };
 }
 
+function stripUnverifiedPlatformEntry(content) {
+  if (typeof content !== "string" || !content) return { content, changed: false };
+  const lines = content.split(/\r?\n/);
+  const filtered = lines.filter((line) => {
+    const barePlatform = /https?:\/\/ws\.waterism\.tech:8446\/?(?:\s|$)/iu.test(line)
+      && !/https?:\/\/ws\.waterism\.tech:8446\/[^\s)\]]+/iu.test(line);
+    return !barePlatform;
+  });
+  const next = filtered.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return { content: next, changed: next !== content };
+}
+
 function detectImageType(buffer) {
   if (
     buffer.length >= 8 &&
@@ -474,17 +486,23 @@ const plugin = {
       if (withoutReasoning.changed && !withoutReasoning.content) {
         return { cancel: true, cancelReason: "已阻止英文内部规划文本发送给用户" };
       }
+      const withoutPlatform = stripUnverifiedPlatformEntry(withoutReasoning.content);
+      const cleanedContent = withoutPlatform.content;
+      const changed = withoutReasoning.changed || withoutPlatform.changed;
+      if (changed && !cleanedContent) {
+        return { cancel: true, cancelReason: "已阻止未验证的平台入口链接" };
+      }
       const baseUrl = process.env.ZHIXUN_REALTIME_FORECAST_BASE_URL;
       if (!baseUrl) {
-        return withoutReasoning.changed ? { content: withoutReasoning.content } : undefined;
+        return changed ? { content: cleanedContent } : undefined;
       }
       const sanitized = stripForecastMediaLinks(
-        withoutReasoning.content,
+        cleanedContent,
         baseUrl,
         process.env.ZHIXUN_FORECAST_MEDIA_DIR ?? DEFAULT_MEDIA_DIR,
       );
       if (!sanitized.changed) {
-        return withoutReasoning.changed ? { content: withoutReasoning.content } : undefined;
+        return changed ? { content: cleanedContent } : undefined;
       }
       if (!sanitized.content) {
         return {
@@ -508,5 +526,6 @@ export {
   sanitizeForecastMediaMessage,
   stripForecastMediaLinks,
   stripEnglishReasoningPreamble,
+  stripUnverifiedPlatformEntry,
 };
 export default plugin;
