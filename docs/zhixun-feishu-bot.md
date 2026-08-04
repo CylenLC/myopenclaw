@@ -201,8 +201,9 @@ ZHIXUN_REALTIME_FORECAST_TIMEOUT=120
 
 如后端开启 `FORECAST_PLOT_ENABLED=true`，每个成功预报结果会包含
 `plot.url`，例如 `/plots/21401550_simplelstm_<run_id>.png`。MCP 兼容层会自动补全为
-`ZHIXUN_REALTIME_FORECAST_BASE_URL` 的完整 URL，并在工具结果中生成一条对应的
-`media_attachments` 记录。机器人最终回复在正文后为每张图加入 OpenClaw 媒体指令：
+`ZHIXUN_REALTIME_FORECAST_BASE_URL` 的完整 URL，并在工具结果的
+`media_delivery.attachments` 中为每张图片返回完整的
+`openclaw_media_directive`。机器人在最终回复正文后原样复制该值：
 
 ```text
 MEDIA:http://10.48.0.81:8097/plots/21401550_simplelstm_<run_id>.png

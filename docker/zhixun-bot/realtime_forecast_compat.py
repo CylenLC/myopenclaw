@@ -88,6 +88,28 @@ def _merge_model_runs(
         row for payload in payloads for row in payload.get("errors", [])
     ] + errors
     merged_payload["attempted_models"] = list(attempted_models)
+    successful_models = [
+        str(row.get("model_name") or row.get("model"))
+        for row in merged_payload["results"]
+        if isinstance(row, dict) and (row.get("model_name") or row.get("model"))
+    ]
+    failed_models = [
+        str(row.get("model_name") or row.get("model"))
+        for row in merged_payload["errors"]
+        if isinstance(row, dict) and (row.get("model_name") or row.get("model"))
+    ]
+    merged_payload["execution_summary"] = {
+        "attempted_count": len(attempted_models),
+        "attempted_models": list(attempted_models),
+        "successful_count": len(successful_models),
+        "successful_models": successful_models,
+        "failed_count": len(failed_models),
+        "failed_models": failed_models,
+        "response_rule": (
+            "只能按本汇总报告成功与失败模型，不得把 attempted_count、"
+            "successful_count 或图片数量混为一谈"
+        ),
+    }
     if hal:
         merged = dict(first)
         merged["data"] = merged_payload
@@ -126,15 +148,21 @@ def _add_media_attachments(value: Any) -> Any:
     available_urls = {url for _, url in entries}
     result = _hide_plot_urls(value, available_urls)
     if entries and isinstance(result, dict):
-        result["media_attachments"] = [
+        directives = [
             {
                 "model_name": model,
-                "media": url,
-                "caption": f"{model} 降雨径流过程图",
-                "delivery": "必须在最终回复中以独立一行 MEDIA:<media> 发送",
+                "openclaw_media_directive": f"MEDIA:{url}",
             }
             for model, url in entries
         ]
+        result["media_delivery"] = {
+            "attachment_count": len(directives),
+            "attachments": directives,
+            "response_rule": (
+                "最终回复正文结束后，逐项原样复制 openclaw_media_directive 的完整值；"
+                "不得把 model_name、说明文字或字段名拼到 MEDIA: 后面，不得改写 URL"
+            ),
+        }
     return result
 
 
@@ -232,7 +260,7 @@ def install(module: Any, base_url: str) -> None:
             wrapped.__doc__ = (
                 "支持显式全模型调用：model_name='all' 会按 "
                 "ZHIXUN_REALTIME_FORECAST_MODELS 逐一执行，并返回 attempted_models、"
-                "逐模型错误和 media_attachments。\n\n"
+                "execution_summary、逐模型错误和 media_delivery。\n\n"
                 + base_doc
             )
         setattr(module, name, wrapped)
