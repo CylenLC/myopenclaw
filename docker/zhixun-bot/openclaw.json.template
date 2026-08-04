@@ -50,7 +50,7 @@
     "codeMode": false
   },
   "messages": {
-    "visibleReplies": "message_tool"
+    "visibleReplies": "automatic"
   },
   "mcp": {
     "servers": {

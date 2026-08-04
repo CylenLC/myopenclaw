@@ -647,7 +647,7 @@ agent = read_only["agents"]["list"][0]
 assert agent["id"] == "zhixun-water"
 assert agent["tools"]["allow"] == ["bundle-mcp", "message"]
 assert read_only["tools"]["profile"] == "messaging"
-assert read_only["messages"]["visibleReplies"] == "message_tool"
+assert read_only["messages"]["visibleReplies"] == "automatic"
 
 feishu = read_only["channels"]["feishu"]
 assert feishu["dmPolicy"] == "open"
