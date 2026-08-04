@@ -9,6 +9,7 @@ also carry an explicit all-points response contract.
 from __future__ import annotations
 
 from functools import wraps
+from datetime import datetime
 import inspect
 import os
 import re
@@ -26,6 +27,38 @@ TIMESERIES_TOOL_NAMES = {
     "get_actual_precip_compatible_timeseries",
     "get_mswep_precip_timeseries",
 }
+
+
+def _validate_run_reference_time(value: Any, requested: Any) -> Any:
+    if not requested or not isinstance(value, dict):
+        return value
+    payload = value.get("data") if isinstance(value.get("data"), dict) else value
+    returned = payload.get("reference_time") if isinstance(payload, dict) else None
+    if not isinstance(returned, str):
+        return value
+    try:
+        requested_dt = datetime.fromisoformat(str(requested).strip().replace("T", " "))
+        returned_dt = datetime.fromisoformat(returned.strip().replace("T", " "))
+    except ValueError:
+        return value
+    try:
+        delta_hours = (returned_dt - requested_dt).total_seconds() / 3600
+    except TypeError:
+        return value
+    validation = {
+        "requested_reference_time": str(requested),
+        "returned_reference_time": returned,
+        "delta_hours": delta_hours,
+        "valid": 0 <= delta_hours <= 3,
+        "response_rule": "不得把不一致的返回时间解释为正常自动后移",
+    }
+    value["reference_time_validation"] = validation
+    if not validation["valid"]:
+        raise RuntimeError(
+            "实时预报起报时间不一致: "
+            f"请求 {requested}，后端返回 {returned}，相差 {delta_hours:g} 小时"
+        )
+    return value
 
 
 def _absolute_url(value: Any, base_url: str) -> Any:
@@ -386,6 +419,10 @@ def install(module: Any, base_url: str) -> None:
                 result = _merge_model_runs(model_results, model_errors, configured_models)
             else:
                 result = await __function(*args, **kwargs)
+            if __name in run_names:
+                result = _validate_run_reference_time(
+                    result, bound.arguments.get("reference_time")
+                )
             normalized = _add_media_attachments(_absolute_url(result, base_url))
             normalized = _add_all_points_contract(normalized, __name)
             return _add_runtime_config(normalized, configured_models, requested_model)

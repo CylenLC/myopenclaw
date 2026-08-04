@@ -170,6 +170,18 @@ function stripForecastMediaLinks(content, rawBaseUrl, mediaDir = DEFAULT_MEDIA_D
   return { content: sanitized, changed };
 }
 
+function stripEnglishReasoningPreamble(content) {
+  if (typeof content !== "string" || !content) return { content, changed: false };
+  const lines = content.split(/\r?\n/);
+  const first = lines.findIndex((line) => line.trim());
+  if (first < 0 || !/^(?:I\s+(?:need|should|will|have|can|cannot)|Let me|Actually\b|Current time\b|The\s+(?:forecast|backend|tool|result)\b)/i.test(lines[first].trim())) {
+    return { content, changed: false };
+  }
+  const chineseStart = lines.findIndex((line, index) => index > first && /[\u3400-\u9fff]/u.test(line));
+  if (chineseStart < 0) return { content: "", changed: true };
+  return { content: lines.slice(chineseStart).join("\n").trim(), changed: true };
+}
+
 function detectImageType(buffer) {
   if (
     buffer.length >= 8 &&
@@ -458,17 +470,21 @@ const plugin = {
       return sanitized.changed ? { message: sanitized.message } : undefined;
     });
     api.on("message_sending", (event) => {
+      const withoutReasoning = stripEnglishReasoningPreamble(event.content);
+      if (withoutReasoning.changed && !withoutReasoning.content) {
+        return { cancel: true, cancelReason: "已阻止英文内部规划文本发送给用户" };
+      }
       const baseUrl = process.env.ZHIXUN_REALTIME_FORECAST_BASE_URL;
       if (!baseUrl) {
-        return undefined;
+        return withoutReasoning.changed ? { content: withoutReasoning.content } : undefined;
       }
       const sanitized = stripForecastMediaLinks(
-        event.content,
+        withoutReasoning.content,
         baseUrl,
         process.env.ZHIXUN_FORECAST_MEDIA_DIR ?? DEFAULT_MEDIA_DIR,
       );
       if (!sanitized.changed) {
-        return undefined;
+        return withoutReasoning.changed ? { content: withoutReasoning.content } : undefined;
       }
       if (!sanitized.content) {
         return {
@@ -491,5 +507,6 @@ export {
   parseTrustedPlotUrl,
   sanitizeForecastMediaMessage,
   stripForecastMediaLinks,
+  stripEnglishReasoningPreamble,
 };
 export default plugin;

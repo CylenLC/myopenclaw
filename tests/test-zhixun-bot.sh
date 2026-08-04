@@ -41,6 +41,7 @@ import plugin, {
   isForecastTool,
   parseTrustedPlotUrl,
   sanitizeForecastMediaMessage,
+  stripEnglishReasoningPreamble,
   stripForecastMediaLinks,
 } from "./docker/zhixun-bot/plugins/forecast-media-hygiene/index.js";
 import { sanitizeTranscriptText } from "./docker/zhixun-bot/sanitize-forecast-session-images.mjs";
@@ -116,6 +117,14 @@ assert.equal(
   ).pathname,
   "/plots/21401550_simplelstm_run.png",
 );
+const leakedReasoning = "I need to re-query both parts in this current turn.\nLet me report the data verbatim.\n\n碧流河水库本轮预报如下。";
+assert.deepEqual(stripEnglishReasoningPreamble(leakedReasoning), {
+  content: "碧流河水库本轮预报如下。",
+  changed: true,
+});
+assert.deepEqual(messageSending({ content: leakedReasoning }), {
+  content: "碧流河水库本轮预报如下。",
+});
 assert.throws(
   () => parseTrustedPlotUrl("http://127.0.0.1:8097/plots/private.png", "http://10.48.0.81:8097"),
   /拒绝下载非实时预报服务同源/,
@@ -512,6 +521,21 @@ module_path = Path("docker/zhixun-bot/realtime_forecast_compat.py")
 spec = importlib.util.spec_from_file_location("realtime_forecast_compat", module_path)
 compat = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(compat)
+
+try:
+    compat._validate_run_reference_time(
+        {"data": {"reference_time": "2026-08-06 02:00:00"}},
+        "2026-08-05 00:00",
+    )
+except RuntimeError as exc:
+    assert "相差 26 小时" in str(exc)
+else:
+    raise AssertionError("跨日错误起报时间必须被拒绝")
+valid_time = compat._validate_run_reference_time(
+    {"data": {"reference_time": "2026-08-05 02:00:00"}},
+    "2026-08-05 00:00",
+)
+assert valid_time["reference_time_validation"]["valid"] is True
 
 calls = []
 
