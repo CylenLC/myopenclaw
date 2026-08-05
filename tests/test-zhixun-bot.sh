@@ -45,6 +45,7 @@ import plugin, {
   stripUnverifiedPlatformEntry,
   stripImageDeliveryDisclosure,
   stripForecastMediaLinks,
+  resolveFeishuRoute,
 } from "./docker/zhixun-bot/plugins/forecast-media-hygiene/index.js";
 import { sanitizeTranscriptText } from "./docker/zhixun-bot/sanitize-forecast-session-images.mjs";
 
@@ -70,6 +71,13 @@ assert.equal(typeof messageReceived, "function");
 assert.equal(typeof afterToolCall, "function");
 assert.equal(isForecastTool("mcp__water_unified__run_all_realtime_forecasts"), true);
 assert.equal(isForecastTool("get_station_timeseries"), false);
+assert.deepEqual(
+  resolveFeishuRoute(
+    { from: "ou_sender", messageChannel: "feishu" },
+    { sessionKey: "session-fallback", nativeChannelId: "oc_fallback_chat" },
+  ),
+  { channel: "feishu", to: "oc_fallback_chat", accountId: undefined, threadId: undefined },
+);
 
 const imageMessage = {
   role: "toolResult",
@@ -185,7 +193,7 @@ const mockApi = {
               assert.equal(params.mediaUrl.startsWith(mediaDir), true);
               assert.equal(params.mediaUrl.startsWith("http"), false);
               assert.deepEqual(params.mediaLocalRoots, [mediaDir]);
-              assert.equal(params.to, "oc_current_chat");
+              assert.ok(["oc_current_chat", "oc_fallback_chat"].includes(params.to));
               assert.equal(params.text, "");
               assert.equal((await readdir(mediaDir)).length > 0, true);
               return { channel: "feishu", messageId: `msg-${sendCalls.length}` };
@@ -276,8 +284,20 @@ await automaticHooks.after_tool_call(
   },
   { sessionKey: "session-1" },
 );
+automaticHooks.message_received(
+  { from: "ou_sender", messageChannel: "feishu", sessionKey: "session-fallback" },
+  { sessionKey: "session-fallback", nativeChannelId: "oc_fallback_chat" },
+);
+await automaticHooks.after_tool_call(
+  {
+    toolName: "mcp__water_unified__run_all_realtime_forecasts",
+    toolCallId: "forecast-call-fallback",
+    result: { details: { media_delivery: { attachments } } },
+  },
+  { sessionKey: "session-fallback" },
+);
 globalThis.fetch = originalFetch;
-assert.equal(sendCalls.length, 6);
+assert.equal(sendCalls.length, 9);
 await rm(mediaDir, { recursive: true, force: true });
 JS
 pass "forecast images use trusted local bytes and stay out of model context"

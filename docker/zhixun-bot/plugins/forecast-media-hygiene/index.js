@@ -351,11 +351,117 @@ function extractMediaAttachments(value, seen = new Set()) {
   return [];
 }
 
-function createForecastImageTool(api, toolContext, overrides = {}) {
+function resolveFeishuRoute(event = {}, context = {}) {
+  const delivery = context.deliveryContext ?? event.deliveryContext ?? {};
+  const channel = [
+    context.channelId,
+    context.messageChannel,
+    delivery.channel,
+    event.channelId,
+    event.messageChannel,
+  ]
+    .find((value) => typeof value === "string" && value.trim());
+  const target = [
+    context.conversationId,
+    context.nativeChannelId,
+    delivery.to,
+    event.conversationId,
+    event.from,
+  ].find((value) => typeof value === "string" && value.trim());
+  const normalizedChannel = String(channel ?? "").split(":")[0].toLowerCase();
+  if (normalizedChannel !== "feishu" || !target) return null;
+  return {
+    channel: "feishu",
+    to: target.trim(),
+    accountId: delivery.accountId ?? context.accountId ?? event.accountId,
+    threadId: delivery.threadId ?? context.threadId ?? event.threadId,
+  };
+}
+
+async function sendForecastImages(api, toolContext, attachments, overrides = {}) {
   const delivery = toolContext.deliveryContext ?? {};
   const channel = String(delivery.channel ?? toolContext.messageChannel ?? "").split(":")[0].toLowerCase();
   const target = delivery.to ?? toolContext.nativeChannelId;
+  if (channel !== "feishu" || typeof target !== "string" || !target.trim()) {
+    throw new Error("当前会话未提供可用的飞书投递目标，无法发送原生图片");
+  }
+  const normalizedAttachments = normalizeAttachments(attachments);
+  const baseUrl = overrides.baseUrl ?? process.env.ZHIXUN_REALTIME_FORECAST_BASE_URL;
+  if (!baseUrl) {
+    throw new Error("未配置 ZHIXUN_REALTIME_FORECAST_BASE_URL，无法发送预报图片");
+  }
+  const mediaDir = path.resolve(
+    overrides.mediaDir ?? process.env.ZHIXUN_FORECAST_MEDIA_DIR ?? DEFAULT_MEDIA_DIR,
+  );
+  const timeoutMs = Number(
+    overrides.timeoutMs ?? process.env.ZHIXUN_REALTIME_FORECAST_IMAGE_TIMEOUT_MS ?? 30000,
+  );
+  const maxImageBytes = Number(overrides.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES);
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("预报图片下载超时必须是大于 0 的毫秒数");
+  }
+  if (!Number.isFinite(maxImageBytes) || maxImageBytes <= 0) {
+    throw new Error("预报图片大小限制必须大于 0");
+  }
+  const fetchImpl = overrides.fetchImpl ?? globalThis.fetch;
+  if (typeof fetchImpl !== "function") {
+    throw new Error("当前 Node.js 运行时不支持下载预报图片");
+  }
 
+  const adapter = await api.runtime.channel.outbound.loadAdapter("feishu");
+  if (!adapter?.sendMedia) {
+    throw new Error("飞书适配器不支持原生图片发送");
+  }
+  await mkdir(mediaDir, { recursive: true, mode: 0o700 });
+
+  const localFiles = [];
+  try {
+    // Download and validate the complete set before the first visible send.
+    for (const attachment of normalizedAttachments) {
+      const image = await downloadTrustedPlot(attachment.mediaUrl, {
+        baseUrl,
+        fetchImpl,
+        timeoutMs,
+        maxImageBytes,
+      });
+      const safeModel = attachment.modelName.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 80);
+      const filePath = path.join(
+        mediaDir,
+        `${Date.now()}-${randomUUID()}-${safeModel || "forecast"}.${image.extension}`,
+      );
+      await writeFile(filePath, image.buffer, { mode: 0o600, flag: "wx" });
+      localFiles.push({ ...attachment, filePath });
+    }
+
+    const sentModels = [];
+    for (const item of localFiles) {
+      await adapter.sendMedia({
+        cfg: toolContext.runtimeConfig ?? toolContext.config ?? api.config,
+        to: target.trim(),
+        text: "",
+        mediaUrl: item.filePath,
+        mediaLocalRoots: [mediaDir],
+        accountId: delivery.accountId ?? toolContext.agentAccountId,
+        threadId: delivery.threadId,
+      });
+      sentModels.push(item.modelName);
+    }
+
+    const payload = {
+      success: true,
+      delivery: "feishu_native_image",
+      sent_count: sentModels.length,
+      sent_models: sentModels,
+      response_rule: "图片已经发送；最终回答不得再次输出图片 URL、Markdown、MEDIA: 或本地路径。",
+    };
+    api.logger?.info?.(`[forecast-media] 已发送 ${sentModels.length} 张飞书原生预报图片`);
+    return toolJsonResult(payload);
+  } finally {
+    await Promise.all(localFiles.map((item) => unlink(item.filePath).catch(() => undefined)));
+  }
+}
+
+function createForecastImageTool(api, toolContext, overrides = {}) {
   return {
     name: "send_forecast_images",
     label: "发送实时预报图片",
@@ -364,84 +470,8 @@ function createForecastImageTool(api, toolContext, overrides = {}) {
       "每次成功的预报查询都必须调用一次；禁止改用 message 工具、Markdown、MEDIA: 或普通链接。"
     ),
     parameters: FORECAST_IMAGE_TOOL_SCHEMA,
-    async execute(_toolCallId, params) {
-      if (channel !== "feishu" || typeof target !== "string" || !target.trim()) {
-        throw new Error("当前会话未提供可用的飞书投递目标，无法发送原生图片");
-      }
-      const attachments = normalizeAttachments(params?.attachments);
-      const baseUrl = overrides.baseUrl ?? process.env.ZHIXUN_REALTIME_FORECAST_BASE_URL;
-      if (!baseUrl) {
-        throw new Error("未配置 ZHIXUN_REALTIME_FORECAST_BASE_URL，无法发送预报图片");
-      }
-      const mediaDir = path.resolve(
-        overrides.mediaDir ?? process.env.ZHIXUN_FORECAST_MEDIA_DIR ?? DEFAULT_MEDIA_DIR,
-      );
-      const timeoutMs = Number(
-        overrides.timeoutMs ?? process.env.ZHIXUN_REALTIME_FORECAST_IMAGE_TIMEOUT_MS ?? 30000,
-      );
-      const maxImageBytes = Number(overrides.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES);
-      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-        throw new Error("预报图片下载超时必须是大于 0 的毫秒数");
-      }
-      if (!Number.isFinite(maxImageBytes) || maxImageBytes <= 0) {
-        throw new Error("预报图片大小限制必须大于 0");
-      }
-      const fetchImpl = overrides.fetchImpl ?? globalThis.fetch;
-      if (typeof fetchImpl !== "function") {
-        throw new Error("当前 Node.js 运行时不支持下载预报图片");
-      }
-
-      const adapter = await api.runtime.channel.outbound.loadAdapter("feishu");
-      if (!adapter?.sendMedia) {
-        throw new Error("飞书适配器不支持原生图片发送");
-      }
-      await mkdir(mediaDir, { recursive: true, mode: 0o700 });
-
-      const localFiles = [];
-      try {
-        // Download and validate the complete set before the first visible send.
-        for (const attachment of attachments) {
-          const image = await downloadTrustedPlot(attachment.mediaUrl, {
-            baseUrl,
-            fetchImpl,
-            timeoutMs,
-            maxImageBytes,
-          });
-          const safeModel = attachment.modelName.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 80);
-          const filePath = path.join(
-            mediaDir,
-            `${Date.now()}-${randomUUID()}-${safeModel || "forecast"}.${image.extension}`,
-          );
-          await writeFile(filePath, image.buffer, { mode: 0o600, flag: "wx" });
-          localFiles.push({ ...attachment, filePath, mimeType: image.mimeType });
-        }
-
-        const sentModels = [];
-        for (const item of localFiles) {
-          await adapter.sendMedia({
-            cfg: toolContext.runtimeConfig ?? toolContext.config ?? api.config,
-            to: target.trim(),
-            text: "",
-            mediaUrl: item.filePath,
-            mediaLocalRoots: [mediaDir],
-            accountId: delivery.accountId ?? toolContext.agentAccountId,
-            threadId: delivery.threadId,
-          });
-          sentModels.push(item.modelName);
-        }
-
-        const payload = {
-          success: true,
-          delivery: "feishu_native_image",
-          sent_count: sentModels.length,
-          sent_models: sentModels,
-          response_rule: "图片已经发送；最终回答不得再次输出图片 URL、Markdown、MEDIA: 或本地路径。",
-        };
-        api.logger?.info?.(`[forecast-media] 已发送 ${sentModels.length} 张飞书原生预报图片`);
-        return toolJsonResult(payload);
-      } finally {
-        await Promise.all(localFiles.map((item) => unlink(item.filePath).catch(() => undefined)));
-      }
+    execute(_toolCallId, params) {
+      return sendForecastImages(api, toolContext, params?.attachments, overrides);
     },
   };
 }
@@ -455,34 +485,31 @@ const plugin = {
     const delivered = new Set();
     api.on("message_received", (event, context) => {
       const sessionKey = context.sessionKey ?? event.sessionKey;
-      const channel = String(context.channelId ?? "").split(":")[0].toLowerCase();
-      const target = context.conversationId ?? event.from;
-      if (sessionKey && channel === "feishu" && typeof target === "string" && target.trim()) {
-        routes.set(sessionKey, {
-          channel: "feishu",
-          to: target.trim(),
-          accountId: context.accountId,
-          threadId: event.threadId,
-        });
+      const route = resolveFeishuRoute(event, context);
+      if (sessionKey && route) {
+        routes.set(sessionKey, route);
       }
     });
     api.on("after_tool_call", async (event, context) => {
       if (event.error || !isForecastTool(event.toolName)) return;
-      const route = routes.get(context.sessionKey);
+      const route = routes.get(context.sessionKey) ?? resolveFeishuRoute(event, context);
       const attachments = extractMediaAttachments(event.result);
-      if (!route || !attachments.length) return;
+      if (!attachments.length) return;
+      if (!route) {
+        api.logger?.warn?.("[forecast-media] 预报图片未发送：未找到当前会话的飞书投递路由");
+        return;
+      }
       const deliveryKey = `${context.sessionKey}:${event.toolCallId ?? attachments.map((item) => item.media_url).join("|")}`;
       if (delivered.has(deliveryKey)) return;
       delivered.add(deliveryKey);
       if (delivered.size > 1000) delivered.clear();
-      const tool = createForecastImageTool(api, {
-        deliveryContext: route,
-        messageChannel: "feishu",
-        nativeChannelId: route.to,
-        runtimeConfig: api.config,
-      });
       try {
-        await tool.execute(event.toolCallId ?? "automatic-forecast-media", { attachments });
+        await sendForecastImages(api, {
+          deliveryContext: route,
+          messageChannel: "feishu",
+          nativeChannelId: route.to,
+          runtimeConfig: api.config,
+        }, attachments);
       } catch (error) {
         delivered.delete(deliveryKey);
         api.logger?.error?.(`[forecast-media] 自动发送预报图片失败: ${error instanceof Error ? error.message : String(error)}`);
@@ -540,5 +567,6 @@ export {
   stripEnglishReasoningPreamble,
   stripUnverifiedPlatformEntry,
   stripImageDeliveryDisclosure,
+  resolveFeishuRoute,
 };
 export default plugin;
