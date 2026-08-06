@@ -24,6 +24,9 @@ services:
       - "18201"
     environment:
       ZHIXUN_CORE_BASE_URL: ${ZHIXUN_CORE_BASE_URL:-https://ws.waterism.tech:8090/api/v2}
+      ZHIXUN_REALTIME_FORECAST_BASE_URL: ${ZHIXUN_REALTIME_FORECAST_BASE_URL:-http://10.48.0.81:8097}
+      ZHIXUN_REALTIME_FORECAST_TIMEOUT: ${ZHIXUN_REALTIME_FORECAST_TIMEOUT:-120}
+      ZHIXUN_REALTIME_FORECAST_MODELS: ${ZHIXUN_REALTIME_FORECAST_MODELS:-simplelstm,sms3-lag3,sms3-uhb}
       ZHIXUN_MCP_STATION_INDEX_PATH: /var/lib/zhixun-water-mcp/station-index.json
       ZHIXUN_MCP_STATION_INDEX_TTL_SECONDS: ${ZHIXUN_MCP_STATION_INDEX_TTL_SECONDS:-86400}
       ZHIXUN_MCP_STATION_INDEX_WORKERS: ${ZHIXUN_MCP_STATION_INDEX_WORKERS:-12}
@@ -75,6 +78,10 @@ services:
       ZHIXUN_BOT_MODEL_ID: ${ZHIXUN_BOT_MODEL_ID:-deepseek-v4-pro}
       ZHIXUN_BOT_MODEL_BASE_URL: ${ZHIXUN_BOT_MODEL_BASE_URL:-https://api.deepseek.com}
       ZHIXUN_BOT_ENABLE_WRITE_TOOLS: ${ZHIXUN_BOT_ENABLE_WRITE_TOOLS:-false}
+      # The native-media plugin downloads only same-origin /plots/ images from
+      # this trusted backend, then uploads local bytes to Feishu.
+      ZHIXUN_REALTIME_FORECAST_BASE_URL: ${ZHIXUN_REALTIME_FORECAST_BASE_URL:-http://10.48.0.81:8097}
+      ZHIXUN_REALTIME_FORECAST_IMAGE_TIMEOUT_MS: ${ZHIXUN_REALTIME_FORECAST_IMAGE_TIMEOUT_MS:-30000}
     depends_on:
       zhixun-water-mcp:
         condition: service_healthy

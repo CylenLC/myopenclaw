@@ -14,7 +14,7 @@
 | 晨间三签 | Hermes cron skill → TDAI + AgentOps 信号 → 飞书推送 | — |
 | AI 情报聚合 | dailyinfo 多源抓取 + AI 摘要 → 飞书 / Discord 推送 | [dailyinfo](https://github.com/iHeadWater/dailyinfo) |
 | 研发日报 | repo-scanner MCP 采集 27 仓库 → Hermes skill → 飞书推送 | [git-contribution-stats](https://gitcode.com/dlut-water/git-contribution-stats) |
-| 水文智能问答 | zhixun 知汛助手 — OpenClaw + zhixun-water-mcp → 飞书 bot（独立栈） | [zhixun-agent](https://github.com/OuyangWenyu/zhixun-agent) |
+| 水文智能问答 | zhixun 知汛助手 — OpenClaw + zhixun-water-mcp → 飞书 bot（含实时预报） | [zhixun-agent](https://github.com/OuyangWenyu/zhixun-agent) |
 | 论文管线 | paper-fetch 下载 → Google Drive 上传 → Zotero 入库 | — |
 | 事务追踪 | aisecretary MCP 服务 → SQLite 持久化 | [aisecretary](https://github.com/iHeadWater/aisecretary) |
 | 邮件 | himalaya CLI 邮件客户端（IMAP/SMTP，多账户） | — |
@@ -104,7 +104,7 @@ cp .env.zhixun-bot.example .env.zhixun-bot  # 编辑填入飞书 App ID/Secret +
 | freshrss | 8081 | 主栈 | RSS 聚合（dailyinfo 数据源） |
 | uptime-kuma | 3001 | 主栈 | 服务监控面板 |
 | backup-cron | — | 主栈 | 定时快照备份 |
-| zhixun-water-mcp | 18201 | zhixun 栈 | 水文 MCP（43 tools），兼容 zhixun-core v2 |
+| zhixun-water-mcp | 18201 | zhixun 栈 | 水文 MCP（默认向机器人开放 54 tools），含实时预报并兼容 zhixun-core v2 |
 | openclaw-zhixun | 18791 | zhixun 栈 | 知汛助手 — OpenClaw 飞书 bot（独立网络 + 数据目录） |
 
 ## 目录结构

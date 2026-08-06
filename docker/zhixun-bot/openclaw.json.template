@@ -29,6 +29,11 @@
     "defaults": {
       "model": {
         "primary": "deepseek/__MODEL_ID__"
+      },
+      "imageMaxDimensionPx": 512,
+      "contextPruning": {
+        "mode": "cache-ttl",
+        "ttl": "1m"
       }
     },
     "list": [
@@ -48,6 +53,12 @@
   "tools": {
     "profile": "messaging",
     "codeMode": false
+  },
+  "messages": {
+    "visibleReplies": "automatic",
+    "groupChat": {
+      "visibleReplies": "automatic"
+    }
   },
   "mcp": {
     "servers": {
@@ -116,6 +127,7 @@
   ],
   "session": {
     "dmScope": "per-channel-peer",
+    "resetTriggers": ["/new", "/reset"],
     "resetByType": {
       "group": {
         "mode": "idle",
@@ -136,11 +148,18 @@
     }
   },
   "plugins": {
+    "allow": ["deepseek", "feishu", "forecast-media-hygiene"],
+    "load": {
+      "paths": ["/opt/zhixun-bot/plugins/forecast-media-hygiene"]
+    },
     "entries": {
       "deepseek": {
         "enabled": true
       },
       "feishu": {
+        "enabled": true
+      },
+      "forecast-media-hygiene": {
         "enabled": true
       }
     }

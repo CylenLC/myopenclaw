@@ -37,9 +37,22 @@ if [[ "${zhixun_path}" != /* ]]; then
   zhixun_path="${REPO_ROOT}/${zhixun_path}"
 fi
 
-if [[ ! -f "${zhixun_path}/mcp_servers/water/mcp_server_unified.py" ]]; then
+required_zhixun_files=(
+  mcp_servers/water/mcp_server_unified.py
+  mcp_servers/water/mcp_server_realtime_forecast.py
+)
+
+missing_zhixun_files=()
+for relative_path in "${required_zhixun_files[@]}"; do
+  if [[ ! -f "${zhixun_path}/${relative_path}" ]]; then
+    missing_zhixun_files+=("${relative_path}")
+  fi
+done
+
+if (( ${#missing_zhixun_files[@]} > 0 )); then
   echo "❌ ZHIXUN_AGENT_PATH 无效: ${zhixun_path}"
-  echo "   需要新版 zhixun-agent，并包含 mcp_servers/water/mcp_server_unified.py。"
+  echo "   请切换 zhixun-agent 到 feat/realtime-forecast-mcp，缺少文件："
+  printf '   - %s\n' "${missing_zhixun_files[@]}"
   exit 1
 fi
 
@@ -83,7 +96,24 @@ else
     up -d --force-recreate
 fi
 
+expected_models="$(grep -E '^ZHIXUN_REALTIME_FORECAST_MODELS=' "${ENV_FILE}" | tail -1 | cut -d= -f2- || true)"
+expected_models="${expected_models:-simplelstm,sms3-lag3,sms3-uhb}"
+container_models="$(
+  docker inspect zhixun-water-mcp \
+    --format '{{range .Config.Env}}{{println .}}{{end}}' \
+    | grep -E '^ZHIXUN_REALTIME_FORECAST_MODELS=' \
+    | tail -1 \
+    | cut -d= -f2-
+)"
+if [[ "${container_models}" != "${expected_models}" ]]; then
+  echo "❌ MCP 容器模型配置与 .env.zhixun-bot 不一致"
+  echo "   .env:     ${expected_models}"
+  echo "   container: ${container_models:-<empty>}"
+  exit 1
+fi
+
 echo "✅ 启动命令已提交"
+echo "   实时预报模型: ${container_models}"
 echo "   状态: docker compose --env-file .env.zhixun-bot -f docker-compose.zhixun-bot.yml ps"
 echo "   日志: docker compose --env-file .env.zhixun-bot -f docker-compose.zhixun-bot.yml logs -f openclaw-zhixun"
 echo "   MCP:  docker compose --env-file .env.zhixun-bot -f docker-compose.zhixun-bot.yml exec openclaw-zhixun node /app/openclaw.mjs mcp probe water_unified --json"

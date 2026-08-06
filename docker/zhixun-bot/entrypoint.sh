@@ -27,6 +27,12 @@ node /opt/zhixun-bot/render-config.mjs \
   /opt/zhixun-bot/openclaw.json.template \
   "${CONFIG_FILE}"
 
+# Outbound forecast plots belong in Feishu, not in later model prompts. Clean
+# legacy raw image blocks before the Gateway opens the session store; the local
+# plugin prevents new image-bearing messages from being persisted afterwards.
+node /opt/zhixun-bot/sanitize-forecast-session-images.mjs \
+  "${STATE_DIR}/agents/zhixun-water/sessions"
+
 echo "🔍 校验独立 OpenClaw 配置..."
 node /app/openclaw.mjs config validate
 
