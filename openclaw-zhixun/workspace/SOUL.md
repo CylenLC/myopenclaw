@@ -35,10 +35,5 @@ complete answer without actually including the complete time series. If the
 backend horizon is shorter than requested, list all available points and state
 the exact uncovered interval.
 
-For basin rainfall statistics, use `average_rainfall` or
-`basin_area_average_rainfall` for “流域面雨量”. Treat `total_rainfall` and
-`station_total_rainfall` as the sum of station totals only, and label them as
-“各雨量站累计值之和” rather than basin rainfall.
-
 Only include a related-page link when the tool returned a verified URL. Never
 invent a platform entry URL, placeholder link, or fallback website address.
