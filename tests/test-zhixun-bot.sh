@@ -27,9 +27,6 @@ grep -q '所有发送到飞书的用户可见文字必须使用简体中文' ope
 grep -q 'cp "${source_file}" "${target_file}"' docker/zhixun-bot/entrypoint.sh
 grep -q 'sanitize-forecast-session-images.mjs' docker/zhixun-bot/entrypoint.sh
 grep -q 'MCP 容器模型配置与 .env.zhixun-bot 不一致' scripts/start-zhixun-bot.sh
-grep -q 'install_rainfall_semantics' docker/zhixun-bot/mcp_entrypoint.py
-grep -q 'basin_area_average_rainfall' openclaw-zhixun/workspace/AGENTS.md
-grep -q 'rainfall_semantics_compat.py' docker/zhixun-bot/Dockerfile.mcp
 pass "shell and Node syntax"
 
 node --input-type=module - <<'JS'
@@ -990,66 +987,6 @@ PY
 grep -q 'related_page_compat.py' docker/zhixun-bot/Dockerfile.mcp
 grep -q 'install_related_pages' docker/zhixun-bot/mcp_entrypoint.py
 pass "station and basin queries include verified related pages"
-
-python3 - <<'PY'
-import asyncio
-import importlib.util
-from pathlib import Path
-from types import SimpleNamespace
-
-module_path = Path("docker/zhixun-bot/rainfall_semantics_compat.py")
-spec = importlib.util.spec_from_file_location("rainfall_semantics_compat", module_path)
-compat = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(compat)
-
-async def get_basin_rainfall_summary(basin_name, start_time="", stop_time=""):
-    return {
-        "basin_name": basin_name,
-        "summary": {
-            "total_rainfall": 57420.0,
-            "average_rainfall": 617.42,
-        },
-    }
-
-async def get_rainfall_statistics(scope, name, period_type, year, **kwargs):
-    return {
-        "scope": scope,
-        "station_count": 93,
-        "current_year_total": 57420.0,
-        "average_total": 9300.0,
-        "statistics": [{
-            "period": 4,
-            "period_label": "4月",
-            "current_year_value": 4213.4,
-            "average_value": 1000.0,
-            "deviation_from_average": 3213.4,
-            "deviation_percentage": 321.3,
-        }],
-    }
-
-mcp = SimpleNamespace(
-    get_basin_rainfall_summary=get_basin_rainfall_summary,
-    get_rainfall_statistics=get_rainfall_statistics,
-)
-compat.install(mcp)
-
-async def main():
-    result = await mcp.get_basin_rainfall_summary("大伙房水库")
-    summary = result["summary"]
-    assert summary["basin_area_average_rainfall"] == 617.42
-    assert summary["station_total_rainfall"] == 57420.0
-    assert summary["rainfall_metric_contract"]["basin_area_rainfall_field"] == "average_rainfall"
-    assert "各站累加值" in result["rainfall_response_rule"]
-    stats = await mcp.get_rainfall_statistics("basin", "大伙房水库", "month", 2025)
-    assert stats["current_year_total"] == 617.42
-    assert stats["station_current_year_total"] == 57420.0
-    assert stats["statistics"][0]["current_year_value"] == 45.31
-    assert stats["statistics"][0]["station_current_year_value"] == 4213.4
-    assert stats["statistics"][0]["deviation_from_average"] == 34.56
-
-asyncio.run(main())
-PY
-pass "basin rainfall metric semantics"
 
 render() {
   local write_tools="$1"

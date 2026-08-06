@@ -6,7 +6,6 @@ import asyncio
 import utils_xz
 from briefing_compat import install as install_briefing_compat
 from related_page_compat import install as install_related_pages
-from rainfall_semantics_compat import install as install_rainfall_semantics
 from realtime_forecast_compat import (
     install as install_realtime_forecast_compat,
     install_all_points_contract,
@@ -23,7 +22,6 @@ import mcp_server_xz
 
 # Patch functions before mcp_server_unified imports and registers them.
 install_related_pages(mcp_server_xz, get_url_server)
-install_rainfall_semantics(mcp_server_xz)
 install_all_points_contract(
     mcp_server_xz,
     {
